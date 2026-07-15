@@ -1,21 +1,20 @@
-# 项目名称 - 开发工作流
+# MergeMill — 自主开发流水线
 
 ## 项目概览
 
-[在此描述项目的核心功能和目标]
+MergeMill 是一个完全自动化的开发流水线，将 GitHub Issue 转化为已合并的 Pull Request。Dispatcher 按 cron 定时扫描带 `MergeMill` 标签的 Issue，调度 Dev Agent 在隔离 worktree 中通过 TDD 实现功能，再移交 Review Agent 进行代码审查和自动合并——全程无人干预。
 
 ---
 
 ## 技术栈
 
-[根据你的实际项目填写]
-
 | 组件 | 选择 | 理由 |
 |-----------|--------|----------|
-| 前端 | - | - |
-| 后端 | - | - |
-| 数据库 | - | - |
-| 测试 | - | - |
+| 核心语言 | Bash | 调度器和 wrapper 脚本 |
+| Agent CLI | Claude Code / Codex / Kiro / opencode / agy | AI 编程 Agent，可插拔 |
+| 版本控制 | Git + GitHub | Issue 跟踪、PR、CI/CD |
+| 测试框架 | Shell 单元测试 (自定义) | 针对 bash 脚本的 grep 断言测试 |
+| CI/CD | GitHub Actions | Hermetic + Live Smoke 双层 CI |
 
 ---
 
@@ -295,4 +294,8 @@ cp scripts/MergeMill.conf.example scripts/MergeMill.conf
 
 ## 安全最佳实践
 
-[根据你的项目填写安全注意事项]
+- **GH_TOKEN** 使用 GitHub classic PAT（`repo` scope），通过 `MergeMill.conf` 注入，不提交到仓库
+- `MergeMill.conf` 已在 `.gitignore` 中排除
+- Pipeline 将 Issue 内容作为 Agent 指令执行——仅在私有仓库和可信环境中使用
+- 公开仓库中 Issue 是 prompt 注入攻击面，详见 `docs/security.md`
+- 研发流程强制 git worktree 隔离，防止主工作目录脏状态影响运行中的 dispatcher

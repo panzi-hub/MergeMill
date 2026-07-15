@@ -115,12 +115,12 @@ assert_grep "auto-merge failure branch references pending-dev (itp_transition_st
 # We verify by grepping the entire wrapper for `--remove-label MergeMill`
 # and confirming it appears EXACTLY ONCE (the success branch),
 # not twice (which would mean the failure branch also strips it).
-_autonomous_strip_count=$(grep -cE 'remove-label +.?MergeMill' "$WRAPPER_CODE" || true)
-if [[ "$_autonomous_strip_count" -le 1 ]]; then
+_mergemill_strip_count=$(grep -cE 'remove-label +.?MergeMill' "$WRAPPER_CODE" || true)
+if [[ "$_mergemill_strip_count" -le 1 ]]; then
   echo -e "  ${GREEN}PASS${NC}: 'remove-label MergeMill' appears at most once (success-only path)"
   PASS=$((PASS + 1))
 else
-  echo -e "  ${RED}FAIL${NC}: 'remove-label MergeMill' appears $_autonomous_strip_count times — failure branch shouldn't strip MergeMill"
+  echo -e "  ${RED}FAIL${NC}: 'remove-label MergeMill' appears $_mergemill_strip_count times — failure branch shouldn't strip MergeMill"
   FAIL=$((FAIL + 1))
 fi
 

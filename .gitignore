@@ -109,9 +109,9 @@ CLAUDE.local.md
 .windsurf/
 skills-lock.json
 
-# Autonomous pipeline config (contains project-specific values)
-scripts/autonomous.conf
-skills/autonomous-dispatcher/scripts/autonomous.conf
+# MergeMill pipeline config (contains project-specific values)
+scripts/MergeMill.conf
+skills/MergeMill-dispatcher/scripts/MergeMill.conf
 
 # agent-smoke matrix (machine-local; may reference local secrets paths). The
 # committed example is tests/e2e/e2e.conf.example. (INV-63, #222)
@@ -119,7 +119,7 @@ tests/e2e/e2e.conf
 
 # Runtime symlink created by lib-auth.sh (points to gh-with-token-refresh.sh)
 scripts/gh
-skills/autonomous-dispatcher/scripts/gh
+skills/MergeMill-dispatcher/scripts/gh
 
 # Claude Code scheduled tasks lock
 .claude/scheduled_tasks.lock
