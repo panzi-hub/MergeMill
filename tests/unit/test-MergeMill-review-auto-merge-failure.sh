@@ -1,0 +1,198 @@
+#!/bin/bash
+# test-MergeMill-review-auto-merge-failure.sh — source-of-truth grep tests
+# verifying MergeMill-review.sh handles auto-merge failure correctly:
+#
+#   - Wrapper does NOT close the linked issue on any path (issue #145).
+#   - Auto-merge failure branch posts comment on PR (not issue) with merge error.
+#   - Auto-merge failure branch flips issue label to pending-dev (NOT approved),
+#     keeping MergeMill so the dispatcher Step 4 picks it up next tick.
+#   - Auto-merge success branch removes MergeMill and adds approved (regression
+#     pin for the happy path).
+#
+# Strategy: grep the wrapper script as source-of-truth. The wrapper is too
+# heavy to execute end-to-end (it spawns the agent + makes gh API calls) so
+# we verify structural invariants in the source.
+#
+# Run: bash tests/unit/test-MergeMill-review-auto-merge-failure.sh
+
+set -uo pipefail
+
+PASS=0
+FAIL=0
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+WRAPPER="$PROJECT_ROOT/skills/MergeMill-dispatcher/scripts/MergeMill-review.sh"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+assert_grep() {
+  local desc="$1" pattern="$2" file="$3"
+  if grep -qE "$pattern" "$file"; then
+    echo -e "  ${GREEN}PASS${NC}: $desc"
+    PASS=$((PASS + 1))
+  else
+    echo -e "  ${RED}FAIL${NC}: $desc (pattern: $pattern)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+assert_not_grep() {
+  local desc="$1" pattern="$2" file="$3"
+  if ! grep -qE "$pattern" "$file"; then
+    echo -e "  ${GREEN}PASS${NC}: $desc"
+    PASS=$((PASS + 1))
+  else
+    echo -e "  ${RED}FAIL${NC}: $desc (matched: $pattern)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# Strip bash comments before matching, so a #-prefixed mention doesn't
+# accidentally match. Outputs a stripped temp file path on stdout.
+strip_comments() {
+  local src="$1" tmp
+  tmp=$(mktemp)
+  # Remove full-line comments and trailing comments. Doesn't try to be
+  # heredoc-aware — heredocs in the wrapper don't contain `gh issue close`,
+  # so a simple grep -v '^[[:space:]]*#' plus sed is sufficient.
+  sed -E 's/[[:space:]]+#[^"]*$//' "$src" | grep -v '^[[:space:]]*#' > "$tmp"
+  echo "$tmp"
+}
+
+WRAPPER_CODE=$(strip_comments "$WRAPPER")
+trap 'rm -f "$WRAPPER_CODE"' EXIT
+
+# ---------------------------------------------------------------------------
+echo "=== TC-AMF-006: regression — the ONLY gh issue close is the merge_closes_issue=0 cap-gated terminal transition ==="
+# ---------------------------------------------------------------------------
+# This is THE regression pin for issue #145. On the GitHub default
+# (merge_closes_issue=1) closure happens via GitHub's `Closes #N` keyword on PR
+# merge — the wrapper MUST NOT close the issue directly. The ONE sanctioned
+# exception ([INV-87]/[M4]/§4.2, #282): a `merge_closes_issue=0` backend's merge
+# does NOT auto-transition the issue, so the success path closes it explicitly,
+# GATED behind the cap check. So: (a) AT MOST ONE executable `gh issue close`, and
+# (b) it must be the cap-gated one (a `_merge_closes != "1"` guard precedes it on
+# the same success branch), and (c) NEVER on the auto-merge-FAILURE path (#145).
+_close_count=$(grep -cE '^[^#]*gh +issue +close' "$WRAPPER_CODE" || true)
+if [[ "$_close_count" -le 1 ]]; then
+  echo -e "  ${GREEN}PASS${NC}: at most one executable 'gh issue close' (found ${_close_count})"
+  PASS=$((PASS + 1))
+else
+  echo -e "  ${RED}FAIL${NC}: more than one executable 'gh issue close' (found ${_close_count}) — #145 regression risk"
+  FAIL=$((FAIL + 1))
+fi
+# The sole close must be cap-gated: a `_merge_closes` (merge_closes_issue) guard
+# appears in the wrapper.
+if [[ "$_close_count" -eq 1 ]]; then
+  assert_grep "the gh issue close is gated on the merge_closes_issue cap" \
+    '_merge_closes.*!=.*"1"' "$WRAPPER_CODE"
+fi
+
+# Defense-in-depth: also forbid the equivalent gh issue edit --state-change
+# patterns. (gh issue edit doesn't take --state, but a future gh release
+# might; pin defensively.)
+assert_not_grep "no '--state closed' on gh issue edit" \
+  'gh +issue +edit.*--state +closed' "$WRAPPER_CODE"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== TC-AMF-002: auto-merge failure branch flips issue to pending-dev ==="
+# ---------------------------------------------------------------------------
+# The auto-merge failure branch must flip the issue to pending-dev (not approved)
+# so the dispatcher's Step 4 picks the issue up for re-dispatch. As of #331
+# ([INV-97]) this routes through the ITP verb `itp_transition_state … "pending-dev"`
+# (single-remove `reviewing` → add `pending-dev`) rather than a raw
+# `gh issue edit --add-label pending-dev`; accept either the migrated verb form
+# or the legacy raw flag.
+assert_grep "auto-merge failure branch references pending-dev (itp_transition_state or raw add-label)" \
+  'itp_transition_state +.?\$ISSUE_NUMBER.?[^)]*pending-dev|add-label +.?pending-dev' "$WRAPPER_CODE"
+
+# The auto-merge failure branch must NOT remove the MergeMill label —
+# pending-dev without MergeMill is invisible to the dispatcher's
+# list_pending_dev selector.
+# We verify by grepping the entire wrapper for `--remove-label MergeMill`
+# and confirming it appears EXACTLY ONCE (the success branch),
+# not twice (which would mean the failure branch also strips it).
+_autonomous_strip_count=$(grep -cE 'remove-label +.?MergeMill' "$WRAPPER_CODE" || true)
+if [[ "$_autonomous_strip_count" -le 1 ]]; then
+  echo -e "  ${GREEN}PASS${NC}: 'remove-label MergeMill' appears at most once (success-only path)"
+  PASS=$((PASS + 1))
+else
+  echo -e "  ${RED}FAIL${NC}: 'remove-label MergeMill' appears $_autonomous_strip_count times — failure branch shouldn't strip MergeMill"
+  FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== TC-AMF-003: auto-merge failure branch posts comment on PR ==="
+# ---------------------------------------------------------------------------
+# The merge error must be surfaced as a comment on the PR (not the issue),
+# so the dev re-dispatch has the failure context in PR view where rebase
+# work happens. Marker prefix is "Auto-merge failed:". The PR-comment write
+# routes through the chp_pr_comment verb (#329, [INV-102]) — the raw
+# `gh pr comment` was migrated behind the CHP seam; the verb still posts on
+# `$PR_NUMBER`, so the on-the-PR intent is unchanged.
+assert_grep "auto-merge failure path posts via chp_pr_comment (PR-comment verb, #329)" \
+  'chp_pr_comment +"\$PR_NUMBER"' "$WRAPPER_CODE"
+
+assert_grep "auto-merge failure marker prefix appears in wrapper" \
+  'Auto-merge failed:' "$WRAPPER_CODE"
+
+# Marker must direct dev re-dispatch (not "please merge manually" which
+# would absolve the MergeMill pipeline of further work — issue #145 AC).
+assert_grep "marker mentions re-dispatching dev for rebase" \
+  '[Rr]e-dispatch.*dev|rebase onto main' "$WRAPPER_CODE"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== TC-AMF-006 (cont): no 'please merge manually' in auto-merge failure path ==="
+# ---------------------------------------------------------------------------
+# The "please merge manually" wording remains acceptable in two paths
+# (no-auto-close, formal-approval-failed) — those genuinely need human
+# action. But the auto-merge-failure path must NOT use it; that's the
+# bug being fixed.
+#
+# We can't easily isolate "the auto-merge-failure path" from the wrapper
+# without parsing bash, so we verify the two legitimate uses are gated
+# behind their preconditions and the third (auto-merge fail) was removed.
+# Concretely: the legitimate uses include "@${REPO_OWNER}" mention, while
+# the auto-merge-failure path historically did not. Pin: the literal
+# string from the buggy code is gone.
+assert_not_grep "old 'Review passed but auto-merge failed. Please merge ... manually' wording removed" \
+  'Review passed but auto-merge failed.* [Pp]lease merge' "$WRAPPER_CODE"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== TC-AMF-007: auto-merge failure branch is structurally distinct ==="
+# ---------------------------------------------------------------------------
+# The merge call must be conditioned on a captured exit status, NOT a
+# fall-through where a failed merge bleeds into the close+approved code.
+# We pin on a paired pattern: the merge captures success/failure into a
+# variable that gates the subsequent issue-edit branch. The merge leaf now
+# routes through the CHP verb chp_merge ([INV-87], #282, W1e-abstracted #400) —
+# the merge strategy (squash + delete branch) is CONTRACT-FIXED inside the
+# leaf, so the caller line is positional (`chp_merge "$PR_NUMBER"`), the
+# `--squash --delete-branch` flag-tail no longer crosses the seam. Still
+# captured into MERGE_OUT/MERGE_RC under `set +e` (unchanged).
+assert_grep "wrapper captures merge result for branching (chp_merge positional, W1e #400)" \
+  'chp_merge "\$PR_NUMBER" 2>&1' "$WRAPPER_CODE"
+
+# Bash syntax check
+echo ""
+echo "=== TC-AMF-syntax: wrapper passes bash -n ==="
+if bash -n "$WRAPPER" 2>/dev/null; then
+  echo -e "  ${GREEN}PASS${NC}: wrapper passes bash -n"
+  PASS=$((PASS + 1))
+else
+  echo -e "  ${RED}FAIL${NC}: wrapper has syntax errors"
+  FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Summary ==="
+echo "  PASS: $PASS"
+echo "  FAIL: $FAIL"
+[[ $FAIL -eq 0 ]] || exit 1

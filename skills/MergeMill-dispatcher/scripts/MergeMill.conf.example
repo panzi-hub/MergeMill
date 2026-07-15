@@ -1,0 +1,867 @@
+#!/bin/bash
+# MergeMill.conf — 自主开发团队流水线配置文件。
+# 将此文件复制为 MergeMill.conf 并填入你的项目值。
+# 值也可以通过环境变量覆盖。
+#
+# === 迁移说明：2026-05-17 — 引入了 AGENT_*_EXTRA_ARGS（关闭 #140）===
+#
+# 现有的 gemini 和 kiro 部署依赖 lib-agent.sh 中的硬编码标志，
+# 此版本将这些标志降级为配置级别的透传参数。在更新用户级别的 skill 后
+# （`npx skills update MergeMill-dispatcher -g -y`）：
+#
+#   - gemini 部署必须添加：
+#       AGENT_DEV_EXTRA_ARGS="--approval-mode yolo --output-format stream-json"
+#       AGENT_REVIEW_EXTRA_ARGS="--approval-mode yolo --output-format stream-json"
+#   - kiro 部署必须添加：
+#       AGENT_DEV_EXTRA_ARGS="--trust-all-tools"
+#     （审查端在 kiro 的 resume_agent 中回退到 run_agent，同样读取
+#     DEV_EXTRA_ARGS，因此仅 dev 端变量即可满足需要）
+#
+# 如果不更新这些配置，调度器将产生幻觉式的成功 / 静默工具拒绝——
+# 这正是 #134 / #136 在 wrapper 层面修复过的故障模式。修复未被回归；
+# 标志列表的所有权已转移到运维者配置中。claude / codex / opencode
+# 不受影响（没有需要降级的运维者可调默认值）。
+#
+# 下方各 CLI 的 EXTRA_ARGS 块中列出了权威值及运维者可调的附加项
+#（--debug、替代输出格式等）。
+#
+# === Prompt 大小：不再受 MAX_ARG_STRLEN 限制（关闭 #144）===
+#
+# 自 2026-05-21 起，wrapper 通过 stdin 将构建的 prompt 传递给 Agent CLI
+#（`printf '%s' "$PROMPT" | <cli> ...`），而非作为位置参数。
+# 此前，若 `gh issue view --json title,body,comments` 的输出超过 128 KB
+#（Linux 中 MAX_ARG_STRLEN = 32 * PAGE_SIZE），wrapper 会在每次调度器 tick
+# 中以 `setsid: Argument list too long` 崩溃（exit 126）——一个基于大小的
+# 静默永久停滞。运维者无需任何操作。此变更为内部改动；永久停滞的 Issue
+# 将在升级后的下一个调度器 tick 中恢复。
+# 编写自定义 AGENT_LAUNCHER 值的运维者必须确保 launcher 将 stdin
+# 转发到 CLI exec — `exec $CLAUDE_CMD "$@"` 隐式地做到了这一点；
+# 一个捕获 stdin（例如用于检测）但不回放它的 wrapper 会破坏此通道。
+# 完整契约见 docs/pipeline/invariants.md 中的 [INV-34]。
+#
+# === 部署拓扑（PR #104 之后；库解析在 PR #227 之后）===
+#
+# 支持两种布局。两种都可用，因为每个入口脚本通过 ${BASH_SOURCE[0]:-$0} 计算
+# 其 CONF 目录（遵循 [INV-14]），因此项目侧的符号链接解析到 MergeMill.conf
+# 所在的 <project>/scripts/。
+#
+# 1. 每个项目独立内置（`npx skills add zxkane/...` 后的默认方式）：
+#      <project>/.agents/skills/.../scripts/dispatch-local.sh   （实体文件）
+#      <project>/scripts/dispatch-local.sh -> ...               （符号链接）
+#    上游 skill 升级需要逐个项目 `npx skills update -p`。
+#
+# 2. 共享安装（一次安装，多个项目使用）：
+#      ~/.claude/skills/.../scripts/dispatch-local.sh           （实体文件）
+#      <project>/scripts/dispatch-local.sh -> ...               （符号链接）
+#    上游升级只需一次 `npx skills update -g`，所有链接到共享安装的项目
+#    均受益。适用于在同一主机上运行多个项目流水线并希望使用单点升级
+#    的场景。设置方式：运行 `npx skills add zxkane/... -g` 一次安装到
+#    用户范围，然后在每个项目创建指向该用户范围安装的
+#    <project>/scripts/<file>.sh 符号链接。
+#
+#    符号链接清单（PR #227 之后，[INV-65]）：项目的 <project>/scripts/
+#    只需要 STABLE ENTRY 脚本 + Agent 可调用工具的符号链接 — 即除了 `lib-*.sh`
+#    之外的全部内容，再减去两个 `*-aws-ssm.sh` 辅助脚本。入口脚本从 REAL
+#    skill 树中通过 `readlink -f` → LIB_DIR 来加载其同级 lib-*.sh，因此
+#    新增的上游 lib-*.sh 无需新的项目符号链接，也不会在缺少 `source` 时
+#    导致 wrapper 崩溃。入口脚本集合：
+#
+#      MergeMill-dev.sh, MergeMill-review.sh, dispatch-local.sh,
+#      dispatcher-tick.sh, dispatcher-multi-tick.sh,
+#      setup-labels.sh, post-verdict.sh,
+#      gh-app-token.sh, gh-with-token-refresh.sh, gh-token-refresh-daemon.sh,
+#      gh-as-user.sh, mark-issue-checkbox.sh, reply-to-comments.sh,
+#      resolve-threads.sh, upload-screenshot.sh
+#
+#    `lib-*.sh` 有意不创建符号链接（从 skill 树解析）。
+#    两个 `*-aws-ssm.sh` 辅助脚本同样不创建符号链接（PR #227 P1）：它们
+#    从自己的目录加载 lib-ssm.sh，并由调度器从 skill 树调用（永远不通过
+#    项目侧符号链接），因此项目侧指向它们的符号链接会因缺失 lib-ssm.sh
+#    而崩溃。让 `install-project-hooks.sh` 管理这些——它精确地为上述集合
+#    创建符号链接，清理 PR #227 之前的安装遗留的过期 per-lib / `*-aws-ssm.sh`
+#    符号链接，并提供 `--doctor`（健康报告）和 `--dry-run`（仅计划）选项。
+#    在入口点被新增或移除后才需要在上游升级后重新运行它——
+#    lib-*.sh 的变更永远不需要。
+#
+#    验证方式：`<project>/scripts/install-project-hooks.sh --doctor` 或
+#    `ls -la <project>/scripts/`。
+#
+# 无论哪种方式，此 MergeMill.conf 位于 <project>/scripts/ 下，通过入口的
+# CONF 目录被发现（lib-config.sh 中的第 2 层）。入口通过导出的
+# MERGEMILL_CONF_DIR（[INV-65]）将 CONF 目录传递给被加载的库，因此即使库
+# 本身从 skill 树加载，配置查找仍以项目为锚点。
+
+# === 项目身份 ===
+PROJECT_ID="my-project"
+REPO="owner/repo-name"
+REPO_OWNER="owner"
+REPO_NAME="repo-name"
+PROJECT_DIR="/path/to/project"
+
+# === Agent 配置 ===
+# AGENT_CMD：为 dev/review wrapper 启动哪个编程 Agent CLI。
+# 一等支持：claude、codex、gemini、kiro、opencode、agy。其他 CLI
+# 通过通用 `<cli> -p <prompt>` 回退方式工作。各 CLI 的恢复语义见
+# README 中的"支持的 Agent CLI"。
+#
+# opencode 前置条件（provider 无关的 CLI，无默认值）：
+#   1. 在此机器上运行一次 `opencode providers login` 以设置至少一个
+#      模型 provider 的凭据。
+#   2. 将下方的 AGENT_DEV_MODEL 和 AGENT_REVIEW_MODEL 设置为明确的
+#      `provider/model` 字符串（例如 "anthropic/claude-sonnet-4-6"）。
+#      将它们留空会让 opencode 无模型可调用。
+#
+# gemini 前置条件：
+#   1. CLI 0.42.0+（需要文档化的 stream-json 模式）。
+#   2. AGENT_DEV_EXTRA_ARGS / AGENT_REVIEW_EXTRA_ARGS 必须设置为
+#      `--approval-mode yolo --output-format stream-json`（关闭 #140）。
+#      如果没有 --approval-mode yolo，每个 write/shell 工具在无头模式下
+#      默认为 ask_user→deny（#102 描述的静默构造式失败模式）。
+#      权威值见下方 "gemini 块"。
+#   3. 有效的 AGENT_DEV_MODEL / AGENT_REVIEW_MODEL id
+#      （参见 https://geminicli.com/docs/reference/configuration/）：
+#        gemini-3-pro-preview, gemini-3-flash-preview,
+#        gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite
+#      `gemini-3-pro`（不带 -preview）不是有效的 id。
+#
+# kiro 前置条件：
+#   1. 在标准 kiro 安装中 AGENT_DEV_EXTRA_ARGS 必须设置为 `--trust-all-tools`
+#     （关闭 #140；替代了 PR #140 之前的 AGENT_PERMISSION_MODE=bypassPermissions
+#     接线方式）。没有这个标志，--no-interactive 无头模式会拒绝每个编码工具，
+#     而 kiro 在退出码 0 时发出流畅的构造式成功信息（#102 R5 故障模式，
+#     最初在 #136 中修复）。如果运维者已自定义 ~/.kiro/agents/<name>.json
+#     且已允许编码工具，则可以将 EXTRA_ARGS 留空。权威值见下方 "kiro 块"。
+#   2. KIRO_AGENT_NAME — 默认为 `MergeMill-dev`。如果你的 kiro 安装使用
+#      不同的 agent 名称（例如标准安装使用 `default`），请在下方覆盖。
+AGENT_CMD="claude"
+# AGENT_DEV_MODEL / AGENT_REVIEW_MODEL：通过 CLI 的 --model 标志传递的模型。
+# 空 = 让 CLI 选择其默认模型（claude / codex / gemini — 当 AGENT_CMD=opencode
+# 时，opencode 没有默认值，如果两者都为空会失败）。
+AGENT_DEV_MODEL=""
+AGENT_REVIEW_MODEL="sonnet"
+# 警告：'bypassPermissions' 授予 Agent 不受限制的 shell 访问权限。
+# 仅在可信、沙盒化的环境中使用（容器、专用 VM）。
+# 生产环境的共享主机上使用 'auto' 或 'plan'。
+AGENT_PERMISSION_MODE="auto"
+
+# 每次 Agent 调用的时钟挂墙时间上限（run_agent / resume_agent）。
+# 接受 coreutils `timeout` 单位：s、m、h、d。默认 4h。
+# 防止挂起的 CLI 进程（例如对已完成会话执行 claude --resume，
+# MCP stdio 死锁）占用 wrapper PID 槽位。关闭 #60（INV-13）。
+#
+# 这是 DEV 端的上限；审查端有自己（更小的）默认值——
+# 见下方 AGENT_REVIEW_TIMEOUT。
+AGENT_TIMEOUT="4h"
+
+# AGENT_REVIEW_TIMEOUT：仅针对 REVIEW Agent CLI 的每端挂钟时间上限
+#（INV-48，#185）。上方共享的 AGENT_TIMEOUT 设置得较宽松（4h），因为
+# dev 运行可能需要数小时；代码审查通常约 1-2 分钟，因此如果审查 CLI
+# 运行数小时，几乎肯定是挂起了。默认将审查限制为 1h，大约提前 3h 回收
+# 静默挂起的审查 CLI（曾观察到：审查 CLI 挂起约 3h，占用 wrapper PID
+# 槽位，直到 4h 的 AGENT_TIMEOUT 触发）。
+#
+# 接受与 AGENT_TIMEOUT 相同的 coreutils `timeout` 单位（s/m/h/d）或纯秒数。
+# 默认 1h。DEV 端不受影响——始终使用 AGENT_TIMEOUT。被此上限 kill 的审查
+# Agent（CLI 退出码 124/137）且未发布裁决的，将 VETO 合并（判定为 FAIL），
+# 不会从多 Agent 一致 PASS 投票中静默丢弃。
+#
+# 无效值（非 `timeout` 单位）或 `0` 值会在审查启动时大声失败
+#（`timeout 0` 会 DISABLE 上限）。不设置则使用 1h 默认值。
+# AGENT_REVIEW_TIMEOUT="1h"
+
+# 可选的 launcher 前缀，包裹在 run_agent / resume_agent 的每次 claude CLI
+# 调用之前。用例：将调度器生成的 wrapper 桥接到与你交互式 `claude` 运行
+# 相同的环境中（Bedrock 认证、MCP 服务器、遥测标签等），而无需在
+#  MergeMill.conf 中重复该环境配置。
+#
+# 契约：launcher 脚本负责自行调用 claude 二进制文件（通常以
+# `exec claude "$@"` 或结束于 `$CLAUDE_CMD "$@"` 的 shell 函数结尾）。
+# wrapper 仅传递 claude 标志 + prompt 作为 "$@" — 不传递二进制名称。
+# 仅适用于 claude 分支；将 AGENT_LAUNCHER 与 AGENT_CMD≠claude 混用
+# 会在启动时被拒绝，因为权威 launcher 是 claude 专属的。
+#
+# dev / review wrapper 还会在调用 launcher 之前导出：
+#   CC_USER=MergeMill-{dev,review}-bot
+#   CC_ROLE_KIND={dev,review}
+# 因此如果 launcher 消费这些变量（例如 cc shell 函数通过 cc-creds
+# 将 CC_USER 管道传输到 AWS STS 会话标签中），可以在成本/遥测管线中
+# 将自主流水线流量与交互式会话分开归因。
+#
+# 示例——在 ~/.bash_aliases 中定义的 `cc` shell 函数，注入 Bedrock +
+# 遥测环境然后调用 claude：
+#
+#   AGENT_LAUNCHER='bash -c '\''source ~/.bash_aliases && cc "$@"'\'' --'
+#
+# 注意事项：
+#   * 使用 `cc "$@"` — 不要使用 `exec cc "$@"`。`exec` 仅运行外部二进制
+#     文件，因此在大多数 Linux 发行版上它会把 `cc` 解析为 /usr/bin/cc（GNU
+#     C 编译器），调度会因 `unrecognized command-line option '--model'` 崩溃。
+#   * `cc` 必须定义为 shell *函数*（而非别名）。bash 非交互式 shell
+#     默认不展开别名，因此 cc 别名会被忽略，PATH 查找会再次找到 C 编译器。
+#   * launcher 由 lib-agent.sh 加载一次并通过 `eval` 分词。将其内容视为
+#     代码而非数据。
+#
+# 默认：不设置 AGENT_LAUNCHER（保持注释状态）。大多数运维者使用
+# wrapper 的直接 claude 调用。
+#
+# AGENT_LAUNCHER=''
+
+# === 各 CLI 额外参数（关闭 #140）===
+#
+# AGENT_DEV_EXTRA_ARGS / AGENT_REVIEW_EXTRA_ARGS 是扁平的字符串，其
+# token 逐字附加在每次 `run_agent`（dev）/ `resume_agent`（review）调用
+# 的结构化参数之后、prompt 定位参数之前。默认值为空。使用 `eval` 分词
+#（与 AGENT_LAUNCHER 相同的信任模型），因此包含空格的引用值能够完好保留：
+#   AGENT_DEV_EXTRA_ARGS='--policy "/path with spaces/policy.json"'
+#
+# 下方五个按 CLI 分组的块显示了权威值。仅取消与你的 AGENT_CMD 设置匹配
+# 的块的注释。
+AGENT_DEV_EXTRA_ARGS=""
+AGENT_REVIEW_EXTRA_ARGS=""
+
+# AGENT_DEV_LAUNCHER / AGENT_REVIEW_LAUNCHER：AGENT_LAUNCHER 的每端覆盖
+#（INV-38）。当未设置/为空时默认为 AGENT_LAUNCHER，因此现有的单一 launcher
+# 部署不受影响。当 dev 和 review 在不同 CLI 上运行且需要不同的 launcher
+# 处理时设置——例如 claude 用于 dev 配合 Bedrock 桥接 launcher（cc），
+# kiro 用于 review 无 launcher：
+#
+#   AGENT_CMD="claude"
+#   AGENT_DEV_LAUNCHER='bash -c '\''source ~/.bash_aliases && cc "$@"'\'' --'
+#   AGENT_REVIEW_CMD="kiro"
+#
+# 每端守卫（INV-38）：每端的 launcher 针对该端的 AGENT_CMD 进行门控检查。
+# AGENT_DEV_LAUNCHER 非空要求 AGENT_DEV_CMD=claude；
+# AGENT_REVIEW_LAUNCHER 非空要求 AGENT_REVIEW_CMD=claude。
+# 没有 launcher 的一端不受约束。
+#
+# kiro + review + --trust-all-tools 的注意事项：EXTRA_ARGS 变量按执行阶段
+#（run_agent / resume_agent）而非按端映射，因此
+# `AGENT_DEV_EXTRA_ARGS="--trust-all-tools"` 会被 claude DEV 调用（不接受此
+# 标志）以及 kiro REVIEW 调用同时拾取。现在需要 kiro 端 --trust-all-tools
+# 的运维者应通过自定义 ~/.kiro/agents/<name>.json（权威开关见下方"kiro 块"）
+# 来配置，而非通过 AGENT_DEV_EXTRA_ARGS，直到后续版本填补阶段-vs-端的
+# EXTRA_ARGS 差距。
+# AGENT_DEV_LAUNCHER=""
+# AGENT_REVIEW_LAUNCHER=""
+
+# AGENT_DEV_CMD / AGENT_REVIEW_CMD：AGENT_CMD 的每端覆盖。
+# 当未设置/为空时默认为 AGENT_CMD，因此现有的单一 CLI 部署不受影响。
+# 当你希望 dev 和 review 运行在不同的 CLI 上时设置——例如 claude 负责繁重
+# 的 dev 工作，agy 负责较经济的 review：
+#
+#   AGENT_CMD="claude"           # 也用于未拆分的情况
+#   AGENT_REVIEW_CMD="agy"       # 仅 review 使用 agy
+#   AGENT_DEV_MODEL="opus[1m]"
+#   AGENT_REVIEW_MODEL="Gemini 3.5 Flash (High)"  # agy 命名空间模型——见 agy 块
+#
+# AGENT_LAUNCHER（claude 专属）由 INV-38 按端门控：每端的 launcher 要求
+# 该端的 CLI 为 claude。自然的混合 CLI 部署（claude dev 配合 cc +
+# 非 claude review 无 launcher）可以工作——见上方 AGENT_DEV_LAUNCHER 块。
+# AGENT_DEV_CMD=""
+# AGENT_REVIEW_CMD=""
+
+# AGENT_REVIEW_AGENTS：以空格分隔的负责裁决的审查 CLI 列表，对同一 PR
+# 并行运行，合并依赖于它们的一致同意（INV-40，#166）。空/不设置（默认）=
+# 使用 AGENT_REVIEW_CMD 的单 Agent 审查——行为与旧版完全一致。
+#
+#   AGENT_REVIEW_AGENTS="agy kiro"   # 两者均需 PASS 才能自动合并
+#
+# 工作原理：审查 wrapper 为列出的每个 Agent 生成一个并行子 shell，
+# 各子 shell 拥有独立的 session id、日志，并且（INV-38）非 claude 成员
+# 的 launcher 被清零。每个 Agent 做出独立的 approve/pushback 裁决，
+# 并在其评论末尾标注 `Review Agent: <name>` 标识符；wrapper 按 Agent
+# 归因各裁决并汇总：
+#   - PASS 当且仅当每个 AVAILABLE 的 Agent 全部通过；任一 FAIL → 汇总 FAIL
+#     （→ 移除 reviewing 标签 + 添加 pending-dev 标签）；
+#   - Agent 若 CLI 启动失败或在轮询窗口内未发布裁决，则视为"不可用"
+#     （dropped，含 WARN）；该 Agent 已发布的 FAIL 仍然计入；
+#   - 若所有 Agent 均不可用 → 回到当前的单 Agent 崩溃回退路径。
+#
+# 与下方 REVIEW_BOTS 不同：REVIEW_BOTS 触发外部 GitHub bot，其评论由
+# 裁决 Agent 作为 INPUT 读取；而 AGENT_REVIEW_AGENTS 运行 N 个独立
+# 的裁决 Agent。
+#
+# 并行展开是 wrapper 内部的：tick、review-N.pid 文件和 `reviewing` 标签
+# 均不变。Dispatcher Step 5b 存活模型仍将每个 Issue 视为一个 review wrapper。
+# AGENT_REVIEW_AGENTS=""
+
+# 每个 Agent 的模型 / 额外参数覆盖（INV-41，#168）------------------------------
+# 默认情况下 AGENT_REVIEW_AGENTS 中的每个 Agent 共享 AGENT_REVIEW_MODEL 和
+# AGENT_REVIEW_EXTRA_ARGS。若需要为特定 Agent 指定其独有模型或标志，设置
+# 每个 Agent 的键：Agent 名称大写，所有非字母数字字符映射为 `_`
+#（agy → AGY，kiro → KIRO，claude-code → CLAUDE_CODE）：
+#
+#   AGENT_REVIEW_MODEL_<AGENT>="..."        # 每个 Agent 的模型
+#   AGENT_REVIEW_EXTRA_ARGS_<AGENT>="..."   # 每个 Agent 的额外 CLI 参数
+#
+# 优先级：每个 Agent 的键（若已设置且非空）→ 共享的 AGENT_REVIEW_MODEL /
+# AGENT_REVIEW_EXTRA_ARGS → 库默认值（model 默认 sonnet，args 默认空）。
+# 全部不设置时行为与共享值模式完全一致。
+#
+# 实操示例——混合 "kiro + claude-fam" 队列，两个 CLI 使用不兼容的模型命名空间
+#（kiro 拒绝 `sonnet[1m]`；claude 拒绝 `claude-sonnet-4.6`）：
+#
+#   AGENT_REVIEW_AGENTS="kiro agy"
+#   AGENT_REVIEW_MODEL="claude-sonnet-4.6"            # kiro 命名空间的共享默认值
+#   AGENT_REVIEW_MODEL_AGY="Gemini 3.5 Flash (High)"  # agy 获得真实的 agy 命名空间模型
+#   AGENT_REVIEW_EXTRA_ARGS_KIRO="--trust-all-tools"  # kiro 专属标志
+#   # kiro 无独立的模型键 → 使用共享的 "claude-sonnet-4.6"。
+#   # agy 现已接受 --model，但通过 `agy models` 验证（INV-50）：
+#   # 将共享的 kiro id 传递给它会让 agy WARN 并运行其默认模型，因此
+#   # 设置 AGENT_REVIEW_MODEL_AGY 为有效的 agy 命名空间名称。agy 仍
+#   # 使用共享的 AGENT_REVIEW_EXTRA_ARGS。
+#
+# 注意：审查并行展开运行全新的 run_agent（非 resume_agent），因此审查端
+# 解析出的 extra-args 内部通过 AGENT_DEV_EXTRA_ARGS 传递（run_agent 的
+# _parse_extra_args 所读取的变量）。你只需配置上述审查开关；wrapper 在每个
+# 子 shell 中处理管道连接。
+#
+# 诊断（INV-58，#205）：当 agy 并行成员因达到 Antigravity 配额上限（HTTP 429
+# RESOURCE_EXHAUSTED，"Individual quota reached"）或认证失败而被丢弃为
+# `unavailable` 时，agy 以 rc 0 退出且无裁决。wrapper 现在从 agy 的
+# --log-file 中抓取信息并显示出明确原因——`quota-exhausted（… 在 <dur> 后重置）`
+# 或 `auth-failed`——在"丢弃（不可用）的 Agent"日志行和 Issue 评论中显示，
+# 让你无需翻查 agy 独立日志即可得知 agy 配额耗尽（以及大致何时恢复）。
+# 这仅用于可观测性：配额耗尽的 agy 仍会从一致 PASS 投票中丢弃，而不是判定
+# FAIL，因此队列降级到剩余存活的成员，而非在 agy 配额恢复之前阻止所有合并。
+# Fanout（并行展开）日志行和 Reviewed-HEAD trailer 也报告每个 Agent 的
+# 独立模型（如上述 AGENT_REVIEW_MODEL_AGY），而非共享的 AGENT_REVIEW_MODEL 默认值。
+
+# 每个 Agent 的 launcher 覆盖（INV-42，#173）--------------------------------
+# 与上方 model/extra-args 键相同的后缀约定，但适用于 LAUNCHER。当一个并行
+# 成员是非 claude 的 CLI 且需要通过 launcher wrapper 才能从调度器的 nohup
+# shell 中以无头方式运行时使用——例如 `codex`（类似 claude 的 `cc` 函数）
+# 是 ~/.bash_aliases 函数，在 exec 真实 CLI 之前启动每台机器的 bedrock
+# 代理并导出 OPENAI_BASE_URL + 虚拟 OPENAI_API_KEY：
+#
+#   AGENT_REVIEW_LAUNCHER_<AGENT>="..."   # 每个 Agent 的 launcher argv（eval 分词）
+#
+# 优先级（与 AGENT_REVIEW_MODEL_<AGENT> 一致，但回退逻辑除外）：
+#   - 独立键已设置且非空 → 作为此 Agent 的 launcher 应用；
+#   - 否则 → Agent 保持当前 INV-38 行为（非 claude 成员的 launcher 清零；
+#     claude 成员保留共享的 AGENT_REVIEW_LAUNCHER）。
+# 有意不设回退到共享 AGENT_REVIEW_LAUNCHER：共享 launcher 是 claude 专属的
+#（INV-38），不应自动应用到非 claude 的独立 Agent 槽位。设置
+# AGENT_REVIEW_LAUNCHER_<AGENT> 即你声明"此 launcher 适配此 CLI"，因此它
+# 会为该特定 Agent 绕过 INV-38 的 claude 专属守卫
+#（共享的 AGENT_REVIEW_LAUNCHER 保留其 claude 专属限制）。分词失败记录
+# ERROR 并裸运行。
+#
+# 实操示例——一个通过 bash-aliases 桥接添加 codex 的三个 Agent 队列，
+# 使用与上方 AGENT_DEV_LAUNCHER 中 `cc` claude launcher 相同的
+# `bash -c 'source ~/.bash_aliases && <fn> "$@"' --` 模板：
+#
+#   AGENT_REVIEW_AGENTS="kiro agy codex"
+#   AGENT_REVIEW_MODEL_CODEX="gpt-5.5"          # codex 自身的模型 id（INV-41）
+#   AGENT_REVIEW_LAUNCHER_CODEX=$'bash -c \'source ~/.bash_aliases && codex "$@"' --'
+#   # kiro / agy 无独立 launcher 键 → kiro 和 agy 以清零 launcher（INV-38）
+#   # 运行，与之前完全相同。
+#
+# 范围限定在子 shell 内——独立 launcher 绝不泄漏到 dev 端或兄弟并行成员。
+
+# CODEX_REVIEW_MAX_RERUNS：codex 审查重试上限（INV-62，#218）。当并行审查
+# Agent 为 codex 时，wrapper 运行专用的 `codex review "<prompt>"` 子命令——
+# 原生多步骤，自动将 diff 范围限定到 PR 的合并目标，因此绝不会因 diff 过大
+# 而在审查中途卡住（这取代了 PR #218 之前的 `codex exec` + 自动恢复循环 +
+# 内联 diff 机制）。`codex review` 不支持恢复；瞬态非零退出
+#（上游流中断 / `turn.failed` —— #209）通过重新运行一个全新的审查来应对，
+# 重试次数为此值，且受 AGENT_REVIEW_TIMEOUT 挂钟上限约束。耗尽后 codex
+# 回退到当前的 `unavailable` 行为（无回归）。默认 3。设为 0 以禁用重试
+#（仅一次 `codex review` 调用）。仅影响 codex 审查路径；claude / agy /
+# kiro / gemini 不受影响。
+#
+# CODEX_REVIEW_MAX_RERUNS=3
+
+# 并行展开前的 Agent smoke 门控（INV-64，#224）------------------------------
+# REVIEW_SMOKE_ENABLED：为 "true" 时，审查 wrapper 在审查并行展开之前
+#（Phase A.5 — 在 INV-46 E2E 通道之后、并行展开循环之前）对 EVERY
+# AGENT_REVIEW_AGENTS 成员运行一次廉价的单次 token smoke 测试。它使用
+# 与并行展开相同的启动路径（INV-41 独立模型 + INV-38/INV-42 launcher）
+# 通过 lib-agent-smoke.sh::smoke_agent（INV-63，#222）运行，并应用
+# 三态语义：
+#   - PASS        → 成员继续进入并行展开；
+#   - UNAVAILABLE → 成员从投票中丢弃（配额/容量 — 同一 INV-40
+#                   `unavailable` 容忍；丢弃原因 `smoke: <reason>`）；
+#                   剩余成员正常投票，全部不可用则回退到已有的全不可用终端路径；
+#   - FAIL        → 整个审查大声中止：无并行展开、无裁决、Issue 保持
+#                   `reviewing` 状态，并发布一条评论列出失败的 Agent +
+#                   SMOKE 证据。smoke FAIL 是运维端配置损坏
+#                  （错误的 model id / 过期认证 / 区域漂移 / launcher
+#                   与 CLI 不匹配），而非 PR 缺陷——回退到 dev 会追逐一个
+#                   不存在的 PR 问题，因此保持 `reviewing` 状态，在修复
+#                   配置后的下一个 tick 自动恢复。
+# 为什么配置错误的成员很重要：没有 smoke 的话它会消耗完整的一次审查运行
+#（E2E + N 个审查 Agent + 轮询窗口），然后才以不透明的 `unavailable` 浮出，
+# 这与配额耗尽无法区分。smoke 在开始时便将二者廉价地分开。
+#
+# 默认关闭——按项目选择加入（按项目逐步推出，且可单独回滚）。关闭时
+# wrapper 行为完全不变。单 Agent 项目同样受益：smoke FAIL 中止
+#（保持 `reviewing`）；smoke UNAVAILABLE 回退到全不可用路径
+#（与审查崩溃的终端状态相同）。
+#
+# REVIEW_SMOKE_ENABLED="false"
+#
+# REVIEW_SMOKE_TIMEOUT_SECONDS：每个成员 smoke 的挂钟时间上限。smoke 是
+# 一次单 token 往返；120s 为慢速后端的冷启动 auth + 首个 token 提供了
+# 充裕的空间。接受与 AGENT_TIMEOUT 相同的 coreutils `timeout` 单位
+#（s/m/h/d）或纯秒数。在启动时拒绝：0（GNU `timeout 0` 禁用上限）、
+# 分数、负数、其他单位。
+#
+# REVIEW_SMOKE_TIMEOUT_SECONDS="120"
+
+# --- claude 块 ---
+# claude 无必需的 EXTRA_ARGS — 结构性 --permission-mode 标志通过已有的
+# AGENT_PERMISSION_MODE 开关处理工具信任。常见运维者补充：--debug 用于
+# 详细日志记录，如果你的下游解析器需要不同格式则可设置替代 --output-format。
+#
+# AGENT_CMD="claude"
+# AGENT_DEV_EXTRA_ARGS=""
+# AGENT_REVIEW_EXTRA_ARGS=""
+# 含调试日志的示例：
+# AGENT_DEV_EXTRA_ARGS="--debug"
+
+# --- gemini 块 ---
+# 这两个标志是承重标志（关闭 #134）。没有 --approval-mode yolo，每个
+# write/shell 工具在无头模式下默认 ask_user→deny，gemini 在退出码 0 时
+# 发出流畅的构造式成功信息——#102 R2 静默构造式故障模式。
+# --output-format stream-json（相对于仅包含运行结束 blob 的 `json` 格式）
+# 是 wrapper 心跳存活信号触发的前提。
+#
+# AGENT_CMD="gemini"
+# AGENT_DEV_MODEL="gemini-2.5-pro"          # 或 gemini-3-pro-preview
+# AGENT_REVIEW_MODEL="gemini-2.5-pro"
+# AGENT_DEV_EXTRA_ARGS="--approval-mode yolo --output-format stream-json"
+# AGENT_REVIEW_EXTRA_ARGS="--approval-mode yolo --output-format stream-json"
+
+# --- kiro 块 ---
+# --trust-all-tools 在标准 kiro 安装中是承重标志（关闭 #136）：
+# 默认 kiro agent 的 allowedTools 在 --no-interactive 模式下拒绝每个
+# 编码工具，并在退出码 0 时发出流畅的构造式成功信息——#102 R5 静默
+# 构造式故障模式。如果运维者自定义的 ~/.kiro/agents/<name>.json
+# 已允许编码工具，可将其留空。
+#
+# 注意：kiro 的 resume_agent 回退到 run_agent（无会话模型），
+# 并读取 AGENT_DEV_EXTRA_ARGS，因此通常无需为 kiro 设置
+# AGENT_REVIEW_EXTRA_ARGS。
+#
+# AGENT_CMD="kiro"
+# AGENT_DEV_MODEL="claude-opus-4.7"
+# AGENT_REVIEW_MODEL="claude-sonnet-4.6"
+# AGENT_DEV_EXTRA_ARGS="--trust-all-tools"
+
+# --- codex 块 ---
+# codex 无必需的 EXTRA_ARGS — `exec --json` 是结构性的，codex 的工具
+# 执行没有类似于 gemini 的 ask_user→deny 默认值。下方设置的 model ID
+# 对 ChatGPT 账户认证有效；API-key 认证有不同的有效集合。
+#
+# AGENT_CMD="codex"
+# AGENT_DEV_MODEL="gpt-5.4"
+# AGENT_REVIEW_MODEL="gpt-5.4"
+# AGENT_DEV_EXTRA_ARGS=""
+# AGENT_REVIEW_EXTRA_ARGS=""
+
+# --- opencode 块 ---
+# opencode 无必需的 EXTRA_ARGS — `run --format json` 是结构性的，下方
+# provider/model 选择器通过标准 --model 标志传递。opencode 是 provider
+# 无关的；model id 必须以 `provider/model` 形式给出（例如
+# `amazon-bedrock/global.anthropic.claude-opus-4-7`）。
+#
+# AGENT_CMD="opencode"
+# AGENT_DEV_MODEL="amazon-bedrock/global.anthropic.claude-opus-4-7"
+# AGENT_REVIEW_MODEL="anthropic/claude-sonnet-4-6"
+# AGENT_DEV_EXTRA_ARGS=""
+# AGENT_REVIEW_EXTRA_ARGS=""
+
+# --- agy 块 ---
+# Antigravity 2.0 CLI（Google）—— gemini CLI 的后继者。
+#
+# lib-agent.sh 管理的结构性标志（不要在此添加）：
+#   -p, --dangerously-skip-permissions, --print-timeout, --log-file
+#
+# 运维者注意：
+#   1. agy 接受 --model。其值必须是 `agy models` 中的名称（含空格/括号——
+#      用引号包裹）；wrapper 将解析出的 AGENT_DEV_MODEL / AGENT_REVIEW_MODEL
+#      对照该列表进行验证，若值不是已知 agy 模型则省略 --model 并发出 WARN。
+#     （默认情况下 agy 会对任何 --model 字符串返回 rc 0 并静默使用其默认
+#      模型，不拒绝无效 id，因此 wrapper 是门控。见 [INV-50] 和
+#      docs/pipeline/agy-cli-support.md。）AGENT_DEV_MODEL / AGENT_REVIEW_MODEL
+#      在指定真实 agy 模型名称时被正确使用。
+#   2. --dangerously-skip-permissions 是结构性的且对无头工具执行是承重的；
+#      没有它 agy 会拒绝每个工具调用（静默构造式故障，与 --approval-mode yolo
+#      修复的 gemini ask_user→deny 默认值相同形状）。
+#   3. agy 内部的 --print-timeout 默认为 5 分钟。lib-agent 传递
+#      AGENT_TIMEOUT，因此外部的挂钟时间上限是权威的。
+#   4. 会话 ID 由 agy 创建，并通过 grep 从 CLI 日志文件中捕获——最佳努力
+#      契约见 docs/pipeline/invariants.md 中的 [INV-36]。
+#
+# AGENT_CMD="agy"
+# AGENT_DEV_MODEL="Gemini 3.5 Flash (High)"     # 必须是 `agy models` 中的名称
+# AGENT_REVIEW_MODEL="Gemini 3.5 Flash (High)"  # 必须是 `agy models` 中的名称
+# AGENT_DEV_EXTRA_ARGS=""
+# AGENT_REVIEW_EXTRA_ARGS=""
+
+# === GitHub 认证 ===
+GH_AUTH_MODE="token"
+DEV_AGENT_APP_ID=""
+DEV_AGENT_APP_PEM=""
+REVIEW_AGENT_APP_ID=""
+REVIEW_AGENT_APP_PEM=""
+DISPATCHER_APP_ID=""
+DISPATCHER_APP_PEM=""
+
+# --- 限定权限的 Agent token（[INV-79]，仅 app 模式）---
+# 在 GH_AUTH_MODE=app 中，wrapper 为 AGENT 子进程生成第二个、降低权限的
+# 安装 token（wrapper 保留全写 token 用于标签翻转 / 审批 / 合并 / 裁决）。
+# Agent 的 token 在启动时被清除全写凭据，因此 `gh pr review --approve` /
+# `gh pr merge` 从 Agent 端返回 403 失败——wrapper 的 INV-44/52 门控是
+# 唯一的审批/合并路径。`gh pr create` 由 wrapper 代为处理（Agent 将 PR
+# 标题+正文写入文件）。默认权限范围足以推送分支、评论和勾选复选框：
+#   contents:write（推送——必需）、issues:write（评论/复选框）、
+#   pull_requests:read（无法审批/合并/创建——这是隔离杠杆）。
+# 仅在理解取舍后覆盖（例如当指标证明需要按端分割时，使用更窄的审查端
+# 配置）。App 安装本身仍须授予 pull_requests:write（wrapper 需要它）；
+# 受限 token 仅请求子集。PAT 模式忽略此设置（PAT 无法降权）并记录一次性
+# WARN。见 docs/github-app-setup.md "双 token 分离"。
+# AGENT_TOKEN_PERMISSIONS='{"contents":"write","issues":"write","pull_requests":"read"}'
+
+# === GitLab provider（ISSUE_PROVIDER=gitlab / CODE_HOST=gitlab）===
+#
+# 两个独立的接口选择器环境变量（规范 §2 / §3.4）。两者在不设置时默认均为
+# `github`——不设置下述任何键值的配置文件与 PR #420 之前仅 GitHub 的配置
+# 完全一致。设置为 `gitlab` 将该接口路由到 `providers/{itp,chp}-gitlab.sh`。
+#
+#   ISSUE_PROVIDER — 支持的值：`github`（默认）、`gitlab`、`asana`
+#                    （保留——尚未实现叶子实现）。
+#   CODE_HOST      — 支持的值：`github`（默认）、`gitlab`。
+#
+# 由 P3-1 传输库 + P3-2/P3-3/P3-4 叶子实现消费。将任一设置为 `gitlab`
+# 需要填充下方 `GITLAB_*` 键（或配置 GITLAB_TRANSPORT_HOOK）——传输库
+# 的失败大声预检（[INV-116]）会拒绝选中 gitlab 接口但无 PAT 且无 hook 的情况。
+# ISSUE_PROVIDER=""
+# CODE_HOST=""
+#
+# GITLAB_HOST — 使用 GitLab REST v4 的主机。默认为 `gitlab.com`。
+# 任何其 API 使用标准 PAT 认证对接 `/api/v4` 的自托管 CE/EE 实例均为一等目标。
+# `tests/provider-conformance/fixtures/payloads/gitlab-*.json.meta` 下的
+# fixtures 将建模的最低支持版本锁定在 `v17.x`。
+# GITLAB_HOST=""
+#
+# GITLAB_TOKEN — PAT / 项目访问 token / 组访问 token（可互换——三者均使用
+# `PRIVATE-TOKEN` 头，遵循 P3-1 传输契约）。必需权限范围：`api`。GitLab
+# 无 GitHub App 等效机制，因此 Agent 的 token 姿态在 gitlab 接口上退化为
+# 约定（§5.1）；wrapper 仍持有写权限，受限 token 的隔离杠杆（INV-79）变为
+# 一条 WARN 而非强制分离。完整 token 创建流程见 `docs/gitlab-setup.md`。
+# GITLAB_TOKEN=""
+#
+# GITLAB_PROJECT — 项目的 URL 编码 `namespace/name`（或 `group/subgroup/name`）。
+# 按规范 §3.4 以已编码格式存储，并由每个叶子实现逐字使用——叶子实现绝不
+# 对此值重新编码；动态路径段（标签名、文件路径、跨项目引用）使用独立的
+# `_gl_urlencode`。示例：`group%2Fsubgroup%2Fproject`。
+# GITLAB_PROJECT=""
+#
+# GITLAB_TRANSPORT_HOOK — 指向运维者拥有的 shell 文件的路径，在 provider
+# 初始化之前 source，可替换默认传输函数；不设置则使用标准 PAT 传输。契约：
+# `docs/pipeline/provider-spec.md` §transport。信任模型：运维者拥有的本地文件，
+# 与 `MergeMill.conf` 同等权限——明确不是沙盒。设置时文件必须可读，且只能
+# 重新定义 `_gl_http`；`_gl_api` 仍归库所有，以确保分页 + 退避 + 故障关闭
+# 不被变体丢失。
+# GITLAB_TRANSPORT_HOOK=""
+
+# 真实 `gh` CLI 二进制文件的绝对路径。当 `gh` 安装在最小 POSIX PATH 之外
+#（Homebrew、nvm、asdf、~/bin、/snap/bin、容器 /opt/gh 等）且 dispatcher /
+# wrapper 可能从非交互式 shell 生成（cron、systemd、AWS SSM、GitHub Actions、
+# nohup）时设置。关闭 #92。
+# 示例：
+#   REAL_GH="/home/ubuntu/.linuxbrew/homebrew/bin/gh"
+REAL_GH=""
+
+# === 并发控制 ===
+MAX_CONCURRENT=5
+MAX_RETRIES=3
+
+# === ISSUE_FILTER — 每个调度器的 Issue 选择范围（issue #436，
+# 设计文档 docs/designs/issue-filter.md，[INV-121]）===
+#
+# 可选。将当前调度器实例的范围限制为开放 `MergeMill` Issue 的子集，
+# 应用于每个选择点（scan-new、pending-review、pending-dev、僵死检测、
+# Step-0 清理以及并发计数）。
+# 空/不设置 = 无额外过滤（当前行为——jq 输出相等）。
+#
+# 语法：
+#   原子       label:<name>  |  label:"带空格名称"  |
+#              assignee:<login>  |  assignee:"login"  |  assignee:none
+#              （无引号 `assignee:none` = 未分配；字面量名为 "none" 的
+#              真实用户必须加引号：`assignee:"none"`）
+#   运算符     not > and > or，按此优先级顺序；括号分组
+#   匹配       精确、区分大小写的字符串比较（provider 无关；GitLab
+#              标签区分大小写）
+#   保留字     流水线状态标签（in-progress、reviewing、pending-review、
+#              pending-dev、stalled、approved）和 `MergeMill` 基准标签
+#              作为原子被拒绝——tick 以配置错误中止，而不是接受一个其
+#              成员资格会随状态机运行而变化的过滤条件。
+#
+# 过滤器是一个对已有 `MergeMill` 基准的叠加精炼——它只能缩小选择范围，
+# 不能扩大超出 `MergeMill`。格式错误的过滤器（语法错误、保留标签原子、
+# 或在其 caps 缺少 `assignees=1` 的 provider 上使用 `assignee:` 原子）
+# 会在产生任何副作用之前中止整个 tick——不回退到无过滤扫描（那将静默
+# 违反下方的不相交契约）。
+#
+# ISSUE_FILTER='label:team-a and (label:frontend or label:backend) and not label:wip and (assignee:alice or assignee:none)'
+ISSUE_FILTER=""
+#
+# 多调度器不相交契约（[INV-121]）：当多个调度器实例服务同一仓库时，其
+# `ISSUE_FILTER` 值必须配置为两两不相交——没有一个 Issue 应匹配两个实例
+# 的过滤器。这是一个操作契约，非代码强制执行（无跨主机索权机制）；
+# 一对重叠的过滤器会静默地导致双重调度。推荐模式：每个调度器实例/机器
+# 一个路由标签——
+#   box-tokyo:  ISSUE_FILTER='label:box-tokyo'
+#   box-sg:     ISSUE_FILTER='label:box-sg'
+# 一个不匹配任何实例过滤器的 Issue 将永远不会被任何实例调度——
+# 这是运维者可观察的积压（通过普通的 Issue 列表查询），不是流水线错误。
+# 在 Issue 携带有过渡状态标签时，不要编辑其路由标签或分配者
+#（in-progress / reviewing / pending-review / pending-dev）——仅在静止
+# 时重新划分，否则两个实例可能短暂地在其分片中同时看到同一个 Issue
+#（见 [INV-121] 规则 3）。
+#
+# 过滤器下的 MAX_CONCURRENT 语义：当 ISSUE_FILTER 非空时，上述
+# `MAX_CONCURRENT` 变为每个实例分片的限制（仅检查此实例自身的
+# in-progress/reviewing 计数），而非仓库级别的限制。这是多实例运行的
+# 预期语义。
+#
+# ISSUE_SCAN_LIMIT — 默认 100（匹配 PR #436 之前每个枚举点的硬编码限制）。
+# 每个选择器，包括两个 `count_active` 代码路径（空过滤器的服务端计数和
+# 过滤后的先枚举再计数路径），在 ISSUE_FILTER 缩小结果之前将服务端枚举
+# 结果截断为此值。如果此仓库开放的 `MergeMill` Issue 数量可能接近 100，
+# 且你设置了非空的 ISSUE_FILTER，请将 ISSUE_SCAN_LIMIT 提高到远高于此
+# 数量——否则前 100 条服务端结果之外匹配的 Issue 对当前实例不可见，直到
+# 较旧的 Issue 关闭（先限制后过滤截断，[INV-121] 规则 8）。必须为正整数；
+# 无效值会像格式错误的 ISSUE_FILTER 一样中止 tick。
+# ISSUE_SCAN_LIMIT=100
+
+# Lane-GC systemd --user 作用域后端（[Lane-GC PR-7]，设计文档
+# docs/designs/lane-containment-gc.md §4-C7；INV-120）。仅 Linux、特性自动检测、
+# 且绝不承重——可移植的 pgid 后端（PR-2..PR-5）在任何平台上单独完全足够，
+# 且 macOS 始终使用它。这两个开关仅在主机已具备 systemd-scope 后端的
+# 条件时生效（Linux、systemd-run 存在、用户总线可达、且
+# `loginctl show-user -p Linger --value` == yes——见
+# `adt-gc.sh --doctor` 的 `backend_eligibility=` 行）；在任何其他主机上
+# 它们会被读取但永远不会执行。
+#
+# LANE_TASKS_MAX：在注册作用域上的 `-p TasksMax=<n>`——限制单个 lane 内
+# 的 fork 炸弹（lane 的进程数永远不能超过此值，由内核的 pids 控制器强制执行，
+# 与任何 pgid/注册表簿记无关）。默认 512 可舒适地覆盖观察到的最深 wrapper
+# 子树（Agent CLI + MCP 服务器 + 浏览器 + E2E 服务器）并留有富余空间；
+# 如果合法工作负载触发它，请提高此值。
+LANE_TASKS_MAX=512
+
+# LANE_MEMORY_MAX：在注册作用域上的 `-p MemoryMax=<value>`（systemd 字节
+# 后缀语法，例如 `2G`、`512M`）——将 OOM 本地化到 lane 自身的 cgroup 而非
+# 整个主机。默认不设置：设计将在观察到真实的每 lane RSS 分布后再确定默认值
+#（见设计文档的"超出范围"——"Per-lane MemoryMax 默认值"）。
+# 除非已测量了自身工作负载的内存占用，否则留空/不设置。
+LANE_MEMORY_MAX=
+
+# === 背压准入门控（[Lane-GC PR-6]，设计文档
+# docs/designs/lane-containment-gc.md §4-C6；INV-119）===
+#
+# dispatch-local.sh 在任何下列四个独立阈值中任一被超过时拒绝生成
+#（exit 75，延期——不减少重试预算、不更改标签，在下一个 tick 重新拾取），
+# 但在此之前会进行一次有界的 `adt-gc.sh --quick` 回收尝试。所有四项均为
+# 可选；下方默认值对应典型的单租户开发机。
+#
+# GATE_LOAD_PER_CORE — load1 / nproc 阈值。默认 3（load average 为核心数的
+# 三倍是"此机器已颠簸"的保守标准）。
+# GATE_LOAD_PER_CORE=3
+#
+# GATE_MIN_MEM_MB — MemAvailable 下限，单位为 MB。默认 2048。
+# GATE_MIN_MEM_MB=2048
+#
+# GATE_SWAP_PCT — swap 使用百分比上限（严格大于：门控仅在此值 之上 触发，
+# 例如默认值 90 在 91% 时首次触发，绝不会在稳定的 90.x% 时触发——swap_pct
+# 本身是向下取整的，见 lib-lane.sh::box_health，因此边界读数绝不会在不同
+# tick 之间振荡）。
+# GATE_SWAP_PCT=90
+#
+# MAX_TOTAL_CONCURRENT — 全局活跃 lane 上限，跨共享此机器 lane 注册表的
+# 所有项目进行计数（区别于上述 MAX_CONCURRENT，后者是每个项目且控制着
+# Steps 2-4 自身的扇出）。默认 12。注册表（[Lane-GC PR-2]，INV-109/110）
+# 是最终使跨项目上限成为可能的要素——一个尚无注册表的新主机回退到仅计数
+# 活跃 PID 文件。
+# MAX_TOTAL_CONCURRENT=12
+
+# 僵死检测的冷启动宽限期（[INV-18]，#99 Bug 1）。
+# 在 Step 2/3/4 调度之后，wrapper 需要时间来生成会话、让 Agent CLI 进行
+# 第一次 API 调用并写入其 PID 文件。Step 5 在此窗口期内不得将 wrapper
+# 归类为已崩溃。
+#
+# 在真实开发机上的经验测量：wrapper 启动→首次 Agent 活动在 10 次采样运行
+# 中稳定为 1–7 秒。600（10 分钟）为慢速 MCP 协商、模型首次调用延迟或
+# 远程 SSM 调度延迟保留了 90 倍的余地，同时仍能在两个 tick 内捕获到真正
+# 死亡的 wrapper。设为 0 可禁用（不推荐——虚假的崩溃检测是本开关存在的
+# 意义）。
+DISPATCH_GRACE_PERIOD_SECONDS=600
+
+# Wrapper 心跳间隔（[INV-24]，#111 第 B 部分）。
+# MergeMill-dev.sh / MergeMill-review.sh 在运行时生成一个后台循环，
+# 每隔 HEARTBEAT_INTERVAL_SECONDS 触摸其 PID 文件。tick 的 pid_alive
+# 检查随后基于 mtime 的回退：一个过时的 `kill -0` 在 PID 文件的 mtime
+# 在 HEARTBEAT_INTERVAL_SECONDS * 3（默认 360 秒）之内时被升级为 ALIVE。
+#
+# 原因：长时间运行的审查 wrapper（15-30 分钟 E2E + 多 bot 轮次）经常
+# 与 dispatcher 的 pid_alive 探针竞争。正面的心跳信号让 dispatcher 能够
+# 区分"wrapper 仍在工作中"和"wrapper 真正挂起"。设为 0 可同时禁用
+# wrapper 端的生成和 dispatcher 端的 mtime 回退。
+HEARTBEAT_INTERVAL_SECONDS=120
+
+# 指标保留窗口（[INV-70]，#228）。
+# 纯观察性的指标通道（lib-metrics.sh）在每次 wrapper 运行 / dispatcher
+# 决策时向 <state-dir>/metrics.jsonl 追加一条 JSON 事件。聚合器
+# `metrics-report.sh --prune-days N` 丢弃早于 N 天的行（原子性重写）；
+# 默认 90。当省略 --prune-days 且请求修剪时，此变量是默认的 N。
+# 指标发送本身是纯观察的：指标失败绝不影响 wrapper/dispatcher 行为
+#（INV-70），因此保持此默认值始终是安全的。见 docs/pipeline/metrics.md。
+METRICS_RETENTION_DAYS=90
+
+# 审查接近成功窗口（[INV-24]，#111 第 A 部分）。
+# 在 Step 5b 的 review-DEAD 分支中，在宣布"已崩溃"之前，dispatcher 交叉
+# 检查四个 PR 状态信号——最近的合并、最近的 APPROVED 审查、最近的
+# "Review PASSED|findings" 评论、防御性 kill -0 重试。如果在此窗口内
+# 任一信号为阳性，则跳过崩溃路径；wrapper 要么正在完成，要么处于裁决
+# 后的尾部阶段。设为 0 恢复旧的严格行为（每个 pid_alive 未命中都宣布
+# 为已崩溃）。
+#
+# [INV-43，#172] 如果你运行 E2E_MODE=command 且使用多 Agent 审查
+#（AGENT_REVIEW_AGENTS），请将此值提高到 >= E2E_COMMAND_TIMEOUT_SECONDS
+#（加上一个 tick 的缓冲），以免仍在工作中的命令模式审查 wrapper 被宣布
+# 为已崩溃并在 E2E 中途被 SIGTERM。
+REVIEW_NEAR_SUCCESS_WINDOW_SECONDS=300
+
+# === Dev Agent ===
+DEV_SKILL_CMD="/MergeMill-dev"
+
+# === 审查 Bot ===
+# 以空格分隔的 bot 审查者简称列表，这些 bot 必须在每个 PR 上运行，
+# 然后 MergeMill-review wrapper 才能审批。配置的 bot 是强制性的：
+# 审查 prompt 触发每个 bot，轮询该 bot 的审查结果（每 30 秒，超时 3 分钟），
+# 如果任一已配置的 bot 未及时响应，则审查失败。
+#
+# 默认：""（禁用）。bot 审查是选择性加入的，因为每个外部 bot 是运维者承担
+# 的可用性依赖——当 bot 缓慢或不可达时，审查因非实质性原因失败，Issue 在
+# pending-review 和 pending-dev 之间来回弹跳（#149）。仅在你明确希望每个 PR
+# 获得特定 bot 的发现时才启用。
+#
+# 内置注册表：
+#   q      → 触发 "/q review"，     用户名 "amazon-q-developer[bot]"
+#   codex  → 触发 "/codex review"， 用户名 "codex[bot]"
+#   claude → 触发 "@claude review"，用户名 "claude[bot]"
+#
+# 空字符串完全禁用 bot 审查强制（wrapper 从 Agent prompt 中省略 bot 审查部分）。
+#
+# 自定义 bot：将简称添加到 REVIEW_BOTS，然后声明：
+#   REVIEW_BOTS_<UPPERCASE_NAME>_TRIGGER="/your trigger"
+#   REVIEW_BOTS_<UPPERCASE_NAME>_LOGIN="your-bot[bot]"
+# 两者都必须设置，否则 dispatcher tick 在配置验证时快速失败。
+#
+# 所有三个内置 bot 拒绝 GitHub App bot 触发器，因此 wrapper
+# 使用 scripts/gh-as-user.sh 以真实用户身份发布。
+REVIEW_BOTS=""
+
+# REVIEW_PROTECTED_PATHS：以空格分隔的 glob 模式，标记出自主 dev Agent 明确
+# 无法编辑的路径——要么是人类拥有的策略文件，要么是需要 Agent 的受限
+# GitHub-App token 不携带的权限范围的路径（INV-92，#298）。当审查 Agent
+# 报告在匹配路径上有阻塞性发现时，它会将该发现归类为
+# `actionable_by_dev_agent=false`；如果 `failed-substantive` 裁决的每个
+# 阻塞性发现都是不可操作的，wrapper 会将 `dev-actionable=false` 折叠到
+# 裁决尾注中，dispatcher 将 Issue 升级为 `stalled`（附带 @owner 通知，
+# 原因=non_actionable_finding），而非重新调度一个永远无法满足该发现的
+# dev 会话。
+#
+# 默认（不设置时）：".github/workflows/** CODEOWNERS .github/CODEOWNERS"
+#   - .github/workflows/**         — 编辑 GitHub Actions 工作流需要 `workflows`
+#                                    token 范围，而 Agent 的受限 token 不携带此
+#                                    范围（见 AGENT_TOKEN_PERMISSIONS / INV-79）。
+#                                    此分类正是为了解决 #286 死锁。
+#   - CODEOWNERS / .github/CODEOWNERS — 维护者拥有的代码所有权策略。
+#
+# 匹配使用 bash extglob/glob 语义（`**`/`*` 跨 `/` 匹配）。覆盖以添加
+# 项目特定的受保护路径（例如人类拥有的发布配置或基础设施目录）。
+# 设为 "" 完全禁用受保护路径分类（每个发现随后被视为 dev 可操作——
+# PR #298 之前的行为）。
+# REVIEW_PROTECTED_PATHS=".github/workflows/** CODEOWNERS .github/CODEOWNERS"
+
+# === E2E 验证（可选）===
+#
+# E2E 有三种模式（issue #161）。模式由 E2E_MODE 选择。
+# E2E_ENABLED 是旧版向后兼容开关，但 wrapper 内部以 E2E_MODE 为准。
+#
+#   E2E_MODE=none     — 审查 prompt 中不包含 E2E 部分（不设置时的默认值；
+#                        等同于 E2E_ENABLED=false）。
+#   E2E_MODE=browser  — Chrome DevTools MCP UI smoke 测试。适用于带有
+#                        每个 PR 预览 URL 的 SaaS Web 应用。要求
+#                        E2E_PREVIEW_URL_PATTERN、E2E_TEST_USER_EMAIL、
+#                        E2E_TEST_USER_PASSWORD。参见
+#                        skills/MergeMill-review/references/e2e-verification.md
+#   E2E_MODE=command  — 调用项目提供的验证命令。适用于后端流水线、CLI 工具、
+#                        库、基础设施即代码或 ML 流水线。要求
+#                        E2E_COMMAND、E2E_COMMAND_EVIDENCE_PARSER。参见
+#                        skills/MergeMill-review/references/e2e-command-mode.md
+#
+# E2E_ENABLED=true 且 E2E_MODE 未设置是一个大声失败条件——wrapper 在启动时
+# 退出。项目必须选择特定模式，而非隐式继承 "browser" 模式。
+E2E_ENABLED="false"
+E2E_MODE=""
+
+# --- Browser 模式字段（当 E2E_MODE=browser 时使用）------------------------
+E2E_PREVIEW_URL_PATTERN=""
+E2E_TEST_USER_EMAIL=""
+E2E_TEST_USER_PASSWORD=""
+E2E_SCREENSHOT_UPLOAD="false"
+
+# E2E_BROWSER_TIMEOUT_SECONDS：browser 模式 E2E 通道的挂钟时间上限
+#（INV-48，#185）。browser E2E 通道是一个 LLM run_agent 通道（INV-46 Phase A），
+# 因此它原本会继承激进的 1h 审查上限（AGENT_REVIEW_TIMEOUT），而慢速的
+# 预览部署 / 冷启动可能在 1h 时被 kill。这给 browser 通道提供了自己独
+# 立的上限，默认为原始 AGENT_TIMEOUT（4h），因此审查上限的缩减不会缩减
+# browser E2E。与命令模式的 E2E_COMMAND_TIMEOUT_SECONDS 对称。接受
+# `timeout` 单位（s/m/h/d）或纯秒数；`0` / 无效值在启动时大声失败。
+# 不设置为 4h 默认值。
+# E2E_BROWSER_TIMEOUT_SECONDS="4h"
+
+# --- Command 模式字段（当 E2E_MODE=command 时使用）------------------------
+#
+# E2E_COMMAND：验证命令。字面量 `${PR_NUMBER}` 占位符由 wrapper 在渲染时替代。
+# 始终用单引号包裹值，以便你的 shell 在 source 此文件时不急于展开占位符。
+#
+# 后端流水线项目示例：
+#   E2E_COMMAND='bash scripts/e2e-pr-stage.sh ${PR_NUMBER}'
+E2E_COMMAND=""
+
+# E2E_COMMAND_PRE_HOOKS：可选。在 E2E_COMMAND 之前运行。失败则中止 E2E。
+# 同样的 `${PR_NUMBER}` 替代。示例：
+#   E2E_COMMAND_PRE_HOOKS='bash scripts/e2e-seed-pr-stage.sh ${PR_NUMBER}'
+E2E_COMMAND_PRE_HOOKS=""
+
+# E2E_COMMAND_TIMEOUT_SECONDS：硬上限，通过 timeout(1) 强制执行。
+# 默认 3600（60 分钟）。MVP 同步运行——大于 3600 的值可能超过 Agent 的
+# 僵死检测阈值。对于更长的流水线，请等待后续的后台模式。
+#
+# [INV-43，#172] 多 Agent 审查 + 命令模式：审查 wrapper 的裁决轮询预算
+# 从此值自动缩放（无需额外调整），但你必须将 REVIEW_NEAR_SUCCESS_WINDOW_SECONDS
+#（上方）设置为 >= E2E_COMMAND_TIMEOUT_SECONDS，以便 dispatcher 不会将
+# 仍在工作中的命令模式审查 wrapper 宣布为"已崩溃"并在 E2E 中途 SIGTERM 它。
+# 否则一个忠实地运行缓慢 E2E 的审查 Agent 会被作为 `unavailable` 从
+# 一致 PASS 投票中丢弃。参见
+# skills/MergeMill-review/references/e2e-command-mode.md
+#（"与多 Agent 审查等待/僵死窗口的交互"）。
+E2E_COMMAND_TIMEOUT_SECONDS=3600
+
+# E2E_COMMAND_EVIDENCE_PARSER：当 E2E_MODE=command 时必须设置。读取验证
+# 命令的日志文件作为 $1，向 stdout 输出 markdown 证据块。该块必须以
+# SHA 绑定的标记结束：
+#   <!-- e2e-evidence: complete sha="${PR_HEAD_SHA}" -->
+# wrapper 将 PR_HEAD_SHA 导出到解析器的环境中；将其嵌入标记对于幂等性
+# 是承重的（防止先前提交的过期证据评论静默满足新代码的重新审查）。审查
+# Agent（而非 wrapper）在发布之前检查是否已有匹配 SHA 的标记，以及是否
+# 可重用先前的证据，遵循 MergeMill-review.sh 中的命令模式 prompt 块。
+# 完整契约见 references/e2e-command-mode.md。
+E2E_COMMAND_EVIDENCE_PARSER=""

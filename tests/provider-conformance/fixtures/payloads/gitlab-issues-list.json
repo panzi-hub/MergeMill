@@ -1,0 +1,20 @@
+[
+  {
+    "iid": 5,
+    "id": 500005,
+    "title": "second issue",
+    "description": "body five",
+    "state": "opened",
+    "labels": ["MergeMill", "in-progress"],
+    "assignees": [ { "username": "alice" }, { "username": "bob" } ]
+  },
+  {
+    "iid": 3,
+    "id": 500003,
+    "title": "first issue",
+    "description": "body three",
+    "state": "opened",
+    "labels": ["MergeMill"],
+    "assignees": []
+  }
+]

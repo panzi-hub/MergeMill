@@ -1,0 +1,21 @@
+{
+  "description": "NEGATIVE — missing the required schema_version (must be rejected).",
+  "states": [
+    { "id": "MergeMill", "label": "MergeMill", "kind": "active", "mermaid": "MergeMill" },
+    { "id": "in_progress", "label": "in-progress", "kind": "active", "mermaid": "in_progress" }
+  ],
+  "label_vocabulary": ["MergeMill", "in-progress"],
+  "transitions": [
+    {
+      "id": "dispatch-new",
+      "from": "MergeMill",
+      "to": "in_progress",
+      "event": "dispatcher-step2-scan-new",
+      "actor": "dispatcher",
+      "guards": ["deps-resolved"],
+      "actions": ["add-label:in-progress"],
+      "mermaid": "MergeMill --> in_progress: x"
+    }
+  ],
+  "diagram": { "header": "stateDiagram-v2" }
+}

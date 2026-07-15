@@ -1,0 +1,70 @@
+{
+  "_comment": "Baseline of raw-gh sites surviving across the dispatcher scripts tree (RECURSIVE; EXCLUDING providers/ and the allowlisted files) after the partial pluggable-providers migration (#281-#285). check-provider-cutover.sh ([INV-91]) FAILs any tree raw-gh NOT under providers/, NOT an allowlisted file, and NOT accounted for here — naming the exact file:line. The checker script itself is scanned (not allowlisted), so its own PASS/FAIL message strings appear here as ordinary survivors; its infrastructure lines (the ALLOWLISTED_FILES array declaration, the primary matcher line, and this _comment template) are structurally exempt (#286-amendment #343) so an allowlist-policy edit does not self-trip Check 4 monotonicity. Regenerate with: bash check-provider-cutover.sh --generate-baseline. Migration PRs that remove a gh leaf MUST shrink this manifest in the same PR; the guard becomes a strict from-zero ban once this is empty. The file-allowlist lives in check-provider-cutover.sh (ALLOWLISTED_FILES), not here.",
+  "surviving_sites": [
+    {
+      "count": 1,
+      "file": "MergeMill-dev.sh",
+      "content": "if [[ -n \"${ISSUE_NUMBER:-}\" ]] && command -v gh &>/dev/null; then"
+    },
+    {
+      "count": 1,
+      "file": "MergeMill-review.sh",
+      "content": "[[ \"$BOT_LOGIN\" == \"null\" ]] && log \"WARNING: gh api user returned null login; falling back to session-id binding\""
+    },
+    {
+      "count": 1,
+      "file": "MergeMill-review.sh",
+      "content": "_bot_login_raw=$(gh api user --jq '.login' 2>&1) && BOT_LOGIN=\"$_bot_login_raw\" || {"
+    },
+    {
+      "count": 1,
+      "file": "MergeMill-review.sh",
+      "content": "gh issue close \"$ISSUE_NUMBER\" --repo \"$REPO\" --reason completed 2>/dev/null \\"
+    },
+    {
+      "count": 1,
+      "file": "MergeMill-review.sh",
+      "content": "log \"WARNING: gh api user failed; verdict detector falling back to session-id binding. stderr (truncated): ${_bot_login_raw:0:200}\""
+    },
+    {
+      "count": 1,
+      "file": "check-provider-cutover.sh",
+      "content": "echo \"cutover-guard: PASS — no new raw gh across the dispatcher scripts tree; the migration surface is unchanged.\""
+    },
+    {
+      "count": 1,
+      "file": "check-provider-cutover.sh",
+      "content": "fail \"NEW/unbaselined raw-gh (${layer}) at ${locs:-$dfile:?}(×$dcount): '$dcontent'. Route this host I/O through an itp_*/chp_* verb (a raw gh outside providers/ is an [INV-91] cutover regression). If it is a legitimate surviving site (or a count change), regenerate providers/cutover-baseline.json (--generate-baseline).\""
+    },
+    {
+      "count": 1,
+      "file": "check-provider-cutover.sh",
+      "content": "fail \"baseline declares a raw-gh site the scanner no longer finds at this count — $bfile (×$bcount): '$bcontent'. A gh leaf was removed/changed (good — a migration landed). Shrink providers/cutover-baseline.json to match (--generate-baseline).\""
+    },
+    {
+      "count": 1,
+      "file": "lib-auth.sh",
+      "content": "_pr_create_ok() { gh pr create --repo \"$repo\" --head \"$branch\" --title \"$title\" --body \"$body\" >/dev/null 2>&1; }"
+    },
+    {
+      "count": 1,
+      "file": "lib-auth.sh",
+      "content": "echo \"Run 'export GH_TOKEN=<token>' or 'gh auth login'.\" >&2"
+    },
+    {
+      "count": 1,
+      "file": "lib-auth.sh",
+      "content": "echo \"WARN: [INV-79] could not create the agent-owned gh shim — falling back to the wrapper shim dir on the agent PATH (bare gh still resolves; AC#1 no-wrapper-shim not met this run).\" >&2"
+    },
+    {
+      "count": 1,
+      "file": "lib-auth.sh",
+      "content": "echo \"WARNING: No GH_TOKEN set and gh auth not configured.\" >&2"
+    },
+    {
+      "count": 1,
+      "file": "lib-auth.sh",
+      "content": "if ! command -v gh &>/dev/null || ! gh auth status &>/dev/null 2>&1; then"
+    }
+  ]
+}

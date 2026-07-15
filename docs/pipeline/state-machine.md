@@ -1,0 +1,178 @@
+# Issue Label State Machine
+
+The MergeMill pipeline is a state machine over GitHub issue labels. An issue moves through states by label transitions, and the three actors (dispatcher, dev wrapper, review wrapper) only ever do two things to it: read its current label set, and write a new one. Every other behavior — comments, retries, PR work — is auxiliary to those transitions.
+
+## Labels
+
+| Label | Owner | Meaning |
+|---|---|---|
+| `MergeMill` | Maintainer | Issue should be processed by the MergeMill pipeline. Required precondition for *any* dispatcher action. Removed when the issue is auto-closed by a successful review. |
+| `in-progress` | Dispatcher (set), dev wrapper trap (clears) | A dev-agent wrapper is actively running for this issue. |
+| `pending-review` | Dev wrapper trap (set), dispatcher (clears) | Development complete, PR open, awaiting review. |
+| `reviewing` | Dispatcher (set), review wrapper trap (clears) | A review-agent wrapper is actively running for this issue. Stays a **single** label even when the wrapper fans out to multiple verdict-reaching agents ([INV-40](invariants.md#inv-40-multi-agent-review-attribution-unanimous-aggregation-and-all-unavailable-fallback)) — the fan-out is internal to the wrapper, so the dispatcher and the state machine see one `reviewing` issue, one `review-${N}.pid`, and one aggregated verdict. |
+| `pending-dev` | Review wrapper / dispatcher / dev trap (set), dispatcher (clears) | Review failed, dev agent is wanted to take another pass. |
+| `approved` | Review wrapper (set) | Review passed. PR merged (or awaiting manual merge if `no-auto-close` is also present). Terminal state for the MergeMill pipeline. |
+| `no-auto-close` | Maintainer | Companion to `MergeMill` — review still runs and approves, but auto-merge is skipped. PR awaits manual merge. |
+| `stalled` | Dispatcher | Retry limit hit. Requires manual investigation. Maintainer removes the label to re-arm the pipeline (which also resets the retry counter — see [INV-05](invariants.md#inv-05-retry-counter-cutoff-rule)). |
+
+The five **active** states are `MergeMill` (no other state label), `in-progress`, `pending-review`, `reviewing`, `pending-dev`. The two **terminal** states are `approved` and `stalled`.
+
+> **Pipeline states are ABSTRACT — rendered per-backend by the Issue-Tracker Provider.** The state names above and the transitions below are **provider-neutral**: they are the contract, not a GitHub-specific representation. How a state is *projected onto a backend* is behind the ITP seam ([`provider-spec.md`](provider-spec.md) §2.1, [INV-87](invariants.md#inv-87-provider-dispatch-is-spec-defined--callers-route-every-issuecode-host-op-through-itp_chp_-never-a-raw-gh-in-the-caller-layer)) — GitHub renders a state as a **label**, GitLab as a **label** too, and Asana as the value of a **single-select custom field**. As of #283 every state transition in `lib-dispatch.sh` routes through `label_swap` → `itp_transition_state` (GitHub: the byte-identical `gh issue edit --remove-label … --add-label …`), and as of #331 the four remaining live-wrapper label-flips (`MergeMill-dev.sh`, `MergeMill-review.sh`, `hygiene_strip_residual_labels`) route through the same verb — extended ([INV-97]) to accept comma-separated REMOVE/ADD lists for the atomic multi-`--remove-label` flips. The spec-gate Form-3 movement scanner (#313) already recognizes `itp_transition_state` and splits the CSV operand on `,`, so the migrated multi-label flips stay scanned (no coverage loss). The mermaid diagram and the [Forbidden transitions](#forbidden-transitions) section are **unchanged** by the provider seams (spec §9): the *abstract* state machine is identical across backends; only the `itp_transition_state` leaf differs. All marker-parsing, retry counting, and verdict routing — including the [INV-25] terminal-state subtraction — stays in the provider-neutral caller layer.
+
+## State diagram
+
+> **GENERATED** — the mermaid block below is generated from
+> [`transitions.json`](transitions.json) by
+> [`scripts/gen-state-machine.sh`](../../skills/MergeMill-dispatcher/scripts/gen-state-machine.sh).
+> **Do not hand-edit between the markers.** To change the diagram, edit
+> `transitions.json` and run `scripts/gen-state-machine.sh`; the `spec-drift` CI
+> job fails on any drift between the table and this region (issue #236).
+
+<!-- BEGIN GENERATED: state-machine — edit docs/pipeline/transitions.json + run scripts/gen-state-machine.sh; do NOT hand-edit between the markers -->
+```mermaid
+stateDiagram-v2
+
+[*] --> MergeMill: maintainer applies MergeMill label
+MergeMill --> in_progress: Dispatcher Step 2 scan-new (deps resolved)
+in_progress --> pending_review: Dev wrapper trap (exit 0, PR exists)
+in_progress --> pending_dev: Dev wrapper trap (exit 0 no PR, or exit non-zero)
+in_progress --> pending_review: Dispatcher Step 5a (ALIVE+PR ready, idle 5min, CI green) and wrapper trap converge (INV-15 PR-6)
+in_progress --> pending_dev: Step 5a SIGTERM with no PR (operator kill / orphan)
+in_progress --> pending_review: Dispatcher Step 5b (DEAD+PR, new commits)
+in_progress --> pending_dev: Dispatcher Step 5b (DEAD+PR, no new commits)
+in_progress --> pending_dev: Dispatcher Step 5b (DEAD, no PR)
+pending_review --> reviewing: Dispatcher Step 3 scan-pending-review
+reviewing --> approved: Review wrapper verdict PASS (merged or manual)
+reviewing --> pending_dev: Review wrapper verdict FAIL
+reviewing --> pending_dev: Review wrapper PASS but auto-merge failed (INV-33)
+reviewing --> pending_dev: Review wrapper PASS but PR CONFLICTING (mergeable gate, INV-44)
+reviewing --> pending_dev: Review wrapper PASS but mergeable UNKNOWN (mergeable gate, INV-44)
+reviewing --> pending_dev: E2E hard gate FAIL — no review fan-out (INV-46, only if PR still OPEN per INV-54)
+reviewing --> pending_dev: E2E evidence missing after lane — re-queue (INV-46, only if PR still OPEN per INV-54)
+reviewing --> pending_dev: Review wrapper trap (crash exit non-zero)
+reviewing --> pending_dev: Dispatcher Step 5b (DEAD reviewing)
+pending_dev --> in_progress: Dispatcher Step 4 scan-pending-dev (retries below MAX)
+pending_dev --> in_progress: Step 4 review-aware (completed session + substantive review failure → dev-new) [INV-35]
+pending_dev --> pending_review: Step 4 review-aware (completed session + non-substantive review failure, under retry cap) [INV-35]
+pending_dev --> pending_review: Step 4 PR-exists short-circuit (a PR already references this issue)
+pending_dev --> in_progress: Step 4a.5 self-heal (same-HEAD FAILED verdict + no resolvable session id + no live wrapper -> bounded dev-new) [INV-111]
+pending_dev --> stalled: Dispatcher Step 4 (retries at MAX)
+pending_dev --> stalled: Step 4 review-aware (non-substantive review-retry cap reached) [INV-35]
+pending_dev --> stalled: Step 4 review-aware (completed session + substantive review failure, no HEAD progress or bot-unfixable) [INV-85]
+pending_dev --> stalled: Step 4 convergence breaker (completed session + substantive review failure + frozen HEAD >=N completed zero-commit rounds) [INV-105]
+reviewing --> approved: Review PASS + no-auto-close (PR open, awaiting manual merge)
+reviewing --> approved: Review PASS but gh pr review --approve failed (manual approval needed)
+reviewing --> pending_dev: Review found no PR (all 3 discovery methods failed)
+reviewing --> reviewing: Concurrent merge — PR no longer OPEN, silent −reviewing (INV-54)
+reviewing --> reviewing: Pre-fan-out smoke FAIL (config error) — stays reviewing, self-heals (INV-64)
+reviewing --> pending_review: PASS but a mandatory REVIEW_BOTS review is still missing — re-queue for re-review (INV-79, scoped mode; bounded by BOT_REVIEW_WAIT_MAX)
+reviewing --> pending_dev: Mandatory bot review absent after BOT_REVIEW_WAIT_MAX waits — substantive FAIL (INV-79)
+approved --> approved: Step 0 hygiene strips transitional residue (INV-25)
+stalled --> stalled: Step 0 hygiene strips transitional residue (INV-25)
+stalled --> MergeMill: Maintainer removes stalled label (MergeMill retained → re-enters via Step 2; retry counter resets, INV-05)
+approved --> [*]: PR merged (auto or manual)
+
+    note right of approved
+        Sticky terminal state (INV-25):
+        any transitional label co-residing
+        with `approved` is stripped by
+        Step 0 hygiene at the next tick.
+    end note
+
+    note right of stalled
+        Same hygiene rule applies (INV-25):
+        residual transitional labels are
+        stripped at tick start.
+    end note
+```
+<!-- END GENERATED: state-machine -->
+
+Each `X --> Y: label` edge corresponds 1:1 to a `transitions[]` entry in
+`transitions.json` (the `mermaid` field). The table below adds the preconditions
+(guards) and side effects (actions) the diagram omits.
+
+## Transition table
+
+Each row is one legal transition. "Actor" identifies who writes the labels. "Preconditions" must all hold; "postcondition comment" is the issue comment the actor posts as part of the transition. Transitions not listed here are forbidden — see [Forbidden transitions](#forbidden-transitions) below.
+
+| From | To | Trigger | Actor | Preconditions | Postcondition comment |
+|---|---|---|---|---|---|
+| (none) | `MergeMill` | Maintainer applies label | Maintainer | — | — |
+| `MergeMill` | `+in-progress` | Dispatcher Step 2 finds the issue | Dispatcher | `MergeMill` only; concurrency below cap; all `## Dependencies` issues `CLOSED`/`MERGED` ([INV-11](invariants.md#inv-11-dependency-state-includes-merged)) | "Dispatching MergeMill development..." |
+| `in-progress` | `−in-progress +pending-review` | Dev wrapper exit 0 with PR for issue | Dev wrapper trap | Wrapper exit 0; `gh pr list` finds PR whose body references `#N` | Agent Session Report (Dev) ([INV-03](invariants.md#inv-03-dev-session-report-comment-format)) |
+| `in-progress` | `−in-progress +pending-dev` | Dev wrapper exit 0 with NO PR | Dev wrapper trap | Wrapper exit 0; no PR found | "Agent exited successfully but no PR was created. Moving to pending-dev for retry." + Session Report |
+| `in-progress` | `−in-progress +pending-dev` | Dev wrapper exit ≠ 0 | Dev wrapper trap | Wrapper exit ≠ 0 | Agent Session Report (with non-zero exit code) |
+| `in-progress` | `−in-progress +pending-review` | Step 5a: ALIVE+PR ready | Dispatcher | Wrapper PID alive; PR exists; CI all SUCCESS; `PR.updatedAt` > 300s ago (strict `-gt`); PID still alive on recheck ([INV-09](invariants.md#inv-09-just_dispatched-skip-rule), [INV-10](invariants.md#inv-10-5-minute-idle-gate-before-sigterm), [INV-15](invariants.md#inv-15-step-5a-sigterm-race-is-non-deterministic)) | "Dev process still alive but PR #N is ready... Moving to pending-review." (after `kill PID` SIGTERM; the wrapper trap converges on the same target via `RECEIVED_SIGTERM` rewrite — PR-6) |
+| `in-progress` | `−in-progress +pending-review` | Step 5b: DEAD+PR with new commits | Dispatcher | Wrapper PID dead; PR exists; current `headRefOid` ≠ last `Reviewed HEAD` trailer ([INV-04](invariants.md#inv-04-reviewed-head-trailer-format), [INV-07](invariants.md#inv-07-empty-reviewed-head-trailer-routes-to-pending-review)) | "Dev process exited (PR found). Moving to pending-review for assessment." ([INV-06](invariants.md#inv-06-crashed--process-not-found-keyword-contract)) |
+| `in-progress` | `−in-progress +pending-dev` | Step 5b: DEAD+PR with NO new commits | Dispatcher | Wrapper PID dead; PR exists; current `headRefOid` = last `Reviewed HEAD` trailer | "Dev process exited (no new commits since last review at \`<sha>\`). Moving to pending-dev for retry." ([INV-06](invariants.md#inv-06-crashed--process-not-found-keyword-contract)) |
+| `in-progress` | `−in-progress +pending-dev` | Step 5b: DEAD, NO PR | Dispatcher | Wrapper PID dead; no PR found | "Task appears to have crashed (no PR found). Moving to pending-dev for retry." |
+| `pending-review` | `−pending-review +reviewing` | Dispatcher Step 3 | Dispatcher | concurrency below cap | "Dispatching MergeMill review..." |
+| `reviewing` | `−reviewing −MergeMill +approved` (PR merged, issue auto-closes via `Closes #N`) | Review verdict PASS, no `no-auto-close`, `gh pr merge` succeeds | Review wrapper | Verdict comment matches session-id; `gh pr review --approve` succeeded; `gh pr merge --squash` succeeded | (no extra issue comment; the wrapper does NOT call `gh issue close` — GitHub closes the issue via `Closes #N` on merge — see [INV-33](invariants.md#inv-33-review-wrapper-must-not-close-the-linked-issue)) |
+| `reviewing` | `−reviewing +pending-dev` (PR stays open) | Review verdict PASS, no `no-auto-close`, `gh pr merge` **fails** ([INV-33](invariants.md#inv-33-review-wrapper-must-not-close-the-linked-issue)) | Review wrapper | Verdict + approval succeeded; `gh pr merge` returned non-zero (conflict, branch protection, transient API error) | PR comment "Auto-merge failed: <stderr>. Re-dispatching dev agent to rebase onto main." (`MergeMill` retained so dispatcher Step 4 picks it up) |
+| `reviewing` | `−reviewing +pending-dev` (PR stays open) | Aggregate PASS but PR `mergeable=CONFLICTING` ([INV-44](invariants.md#inv-44-mergeable-hard-gate--a-conflicting-pr-can-never-reach-approved)) | Review wrapper (mergeable hard gate) | `_classify_mergeable_gate` → `block-substantive`; runs only when `PASSED_VERDICT=true` | Issue "Review findings: ... [BLOCKING] Merge conflict with main ... rebase steps" + PR "Auto-merge failed: PR is CONFLICTING ... Re-dispatching dev agent to rebase onto main." (`failed-substantive`; `MergeMill` retained); wrapper also submits `gh pr review --request-changes` → `reviewDecision=CHANGES_REQUESTED` ([INV-52](invariants.md#inv-52-the-review-wrapper-owns-the-github-native-pr-reviewmerge-action-the-agent-posts-verdicts-only), best-effort) |
+| `reviewing` | `−reviewing +pending-dev` (PR stays open) | Aggregate PASS but `mergeable=UNKNOWN`/empty past `MERGEABLE_RETRIES` ([INV-44](invariants.md#inv-44-mergeable-hard-gate--a-conflicting-pr-can-never-reach-approved)) | Review wrapper (mergeable hard gate) | `_classify_mergeable_gate` → `block-nonsubstantive`; runs only when `PASSED_VERDICT=true` | Issue "Review held: mergeable is UNKNOWN ... re-reviewed next tick" (`failed-non-substantive` cause `mergeable-unknown`; no PR marker; `MergeMill` retained → dispatcher flips back to `pending-review` under `REVIEW_RETRY_LIMIT`) |
+| `reviewing` | `−reviewing +pending-dev` (PR stays open) | E2E hard gate FAIL — runs BEFORE the review fan-out ([INV-46](invariants.md#inv-46-e2e-runs-once-in-a-dedicated-lane-before-the-review-fan-out--gated-not-per-agent)) | Review wrapper (E2E lane + gate) | `_classify_e2e_gate` → `fail` (lane `.rc`≠0); review agents NOT spawned; **PR still OPEN** (the E2E-gate PR-open check, [INV-54](invariants.md#inv-54-the-pr-still-open-guard-gates-all-pass-chain-exits-not-just-pass), passed `proceed`) | Issue "Review findings: ... [BLOCKING] E2E verification failed" (`failed-substantive`; `MergeMill` retained); E2E failure detail already on the PR; wrapper also submits `gh pr review --request-changes` → `reviewDecision=CHANGES_REQUESTED` ([INV-52](invariants.md#inv-52-the-review-wrapper-owns-the-github-native-pr-reviewmerge-action-the-agent-posts-verdicts-only), best-effort — a failed E2E is a substantive blocking FAIL) |
+| `reviewing` | `−reviewing +pending-dev` (PR stays open) | E2E lane clean but no SHA-matching evidence visible after re-fetch ([INV-46](invariants.md#inv-46-e2e-runs-once-in-a-dedicated-lane-before-the-review-fan-out--gated-not-per-agent)) | Review wrapper (E2E lane + gate) | `_classify_e2e_gate` → `block-nonsubstantive` (`.rc`=0, evidence missing — transient); review agents NOT spawned; **PR still OPEN** (the E2E-gate PR-open check, [INV-54](invariants.md#inv-54-the-pr-still-open-guard-gates-all-pass-chain-exits-not-just-pass), passed `proceed`) | Issue "Review held: ... no SHA-matching e2e-evidence ... re-reviewed next tick" (`failed-non-substantive` cause `e2e-evidence-missing`; `MergeMill` retained) |
+| `reviewing` | `−reviewing +approved` (PR open, awaiting manual) | Review verdict PASS, `no-auto-close` set | Review wrapper | Verdict + approval succeeded | "Review PASSED — this issue has the 'no-auto-close' label. @owner please review and merge..." |
+| `reviewing` | `−reviewing +approved` (manual approval needed) | PR-approval API call failed | Review wrapper | Verdict matched but `gh pr review --approve` returned non-zero | "Review PASSED but formal PR approval failed... please approve and merge manually." |
+| `reviewing` | `−reviewing` (no add) | Concurrent review / out-of-band merge — PR no longer OPEN, at the **PASS-chain** gate ([INV-54](invariants.md#inv-54-the-pr-still-open-guard-gates-all-pass-chain-exits-not-just-pass)) | Review wrapper (hoisted PR-open guard) | Aggregate PASS but `gh pr view --json state` ≠ OPEN; `_pr_open_gate` → `skip`. Runs at the TOP of the `PASSED_VERDICT=true` chain, so it short-circuits the mergeable gate's `block-substantive`/`block-nonsubstantive` branches AND the PASS approve/merge path — none of them flip `+pending-dev` once the PR is merged/closed | (none — silent skip; another review/merge wrote `approved` or merged first) |
+| `reviewing` | `−reviewing` (no add) | Concurrent review / out-of-band merge — PR no longer OPEN, at the **E2E hard gate** ([INV-54](invariants.md#inv-54-the-pr-still-open-guard-gates-all-pass-chain-exits-not-just-pass) extension, #195) | Review wrapper (E2E-gate PR-open guard) | E2E gate is `fail`/`block-nonsubstantive` but `gh pr view --json state` ≠ OPEN; `_pr_open_gate` → `skip`. Runs after `_classify_e2e_gate`, before the E2E block cascade — so a PR merged WHILE the E2E lane ran is not flipped `+pending-dev` | (none — silent skip; another review/merge wrote `approved` or merged first) |
+| `reviewing` | `−reviewing +pending-dev` | Review verdict FAIL (substantive — agent posted findings) | Review wrapper | Verdict comment is "Review findings:" matching session-id (`failed-substantive`) | (verdict comment serves as postcondition); wrapper also submits `gh pr review --request-changes` → `reviewDecision=CHANGES_REQUESTED` ([INV-52](invariants.md#inv-52-the-review-wrapper-owns-the-github-native-pr-reviewmerge-action-the-agent-posts-verdicts-only), best-effort). A crash with NO verdict (`failed-non-substantive`) does NOT request changes. |
+| `reviewing` | `−reviewing +pending-dev` | Review wrapper crash | Review wrapper trap | Wrapper exit ≠ 0 AND `RESULT_PARSED=false` | "Review process crashed (exit code: N). Moving back to development for retry." |
+| `reviewing` | `reviewing` (NO change — stays reviewing) | Pre-fan-out agent-smoke FAIL — config error ([INV-64](invariants.md#inv-64-the-review-wrapper-smokes-every-fan-out-member-before-the-fan-out-phase-a5-fail-aborts-the-review-unavailable-drops-the-member-pass-proceeds)) | Review wrapper (Phase A.5) | `REVIEW_SMOKE_ENABLED=true` and `_classify_smoke_gate`→`fail`; wrapper sets `RESULT_PARSED=true` (so the crash trap does NOT flip `+pending-dev`) and exits ≠ 0 | "Review aborted: pre-fan-out agent smoke FAILED ... operator-side configuration/launch error, not a PR defect ... stays `reviewing`" (`failed-non-substantive` cause `smoke-config-error`). Self-heals: the dispatcher re-runs review next tick once the config is fixed. NOT a label transition — distinct from the crash trap (which fires only when `RESULT_PARSED=false`). |
+| `reviewing` | `−reviewing +pending-dev` | Review found no PR | Review wrapper (early exit) | All 3 PR-discovery methods failed | "Review failed: no PR found linked to this issue. Please ensure the PR description contains 'Closes #N'." |
+| `reviewing` | `−reviewing +pending-dev` | Step 5b: DEAD reviewing | Dispatcher | Wrapper PID dead; issue still has `reviewing` | "Review process appears to have crashed. Moving to pending-dev for retry." |
+| `pending-dev` | `−pending-dev +in-progress` | Dispatcher Step 4 (resume) | Dispatcher | concurrency below cap; retry count < `MAX_RETRIES` ([INV-05](invariants.md#inv-05-retry-counter-cutoff-rule)); prior session not terminal ([INV-12](invariants.md#inv-12-resume-only-against-unfinished-sessions)); valid `Dev Session ID:` extractable from comments | "Resuming development (session: <id>)..." |
+| `pending-dev` | `−pending-dev +in-progress` (dev-new) | Step 4 review-aware: prior session `end_turn\|completed` + substantive review-failure verdict newer than session end ([INV-35](invariants.md#inv-35-review-aware-resume-routing-for-completed-sessions)) | Dispatcher | concurrency below cap; retry count < `MAX_RETRIES`; per-issue log truncated successfully (fail-closed otherwise); **and the no-progress guard ([INV-85](invariants.md#inv-85-the-completed-session-failed-substantive-route-is-bounded-to-one-dev-new-per-unchanged-head-a-no-progress-or-bot-unfixable-finding-escalates-to-stalled-never-loops)) did NOT escalate** — i.e. this is the FIRST substantive attempt at the current HEAD (or HEAD advanced since the last review), and the finding is not bot-unfixable. A `no-progress-substantive-attempt:<head>` marker is recorded so the next same-HEAD tick escalates instead | `INV-35-fresh-dev:<sid>` notice + "Resuming with a fresh session..." |
+| `pending-dev` | `−pending-dev +pending-review` | Step 4 review-aware: prior session `end_turn\|completed` + non-substantive review-failure verdict, under `REVIEW_RETRY_LIMIT` ([INV-35](invariants.md#inv-35-review-aware-resume-routing-for-completed-sessions)) | Dispatcher | concurrency below cap; non-substantive flip count for this session < `REVIEW_RETRY_LIMIT` (default 2) | `<!-- review-aware-flip:non-substantive cause=<x> -->` marker + "Re-routing to review (last review failed for non-substantive reason: <x>)." |
+| `pending-dev` | `−pending-dev +stalled` | Dispatcher Step 4 (retry exhausted) | Dispatcher | retry count ≥ `MAX_RETRIES` (after stalled-cutoff filtering) | "Marking as stalled" comment with @owner mention |
+| `pending-dev` | `−pending-dev +stalled` | Step 4 review-aware: non-substantive review-retry cap reached ([INV-35](invariants.md#inv-35-review-aware-resume-routing-for-completed-sessions)) | Dispatcher | non-substantive flip count for this session ≥ `REVIEW_RETRY_LIMIT` | "Marking as stalled — review failed N times for non-substantive reasons" with @owner mention |
+| `pending-dev` | `−pending-dev +stalled` | Step 4 review-aware: completed session + **substantive** review failure with **no HEAD progress** or a **bot-unfixable** finding ([INV-85](invariants.md#inv-85-the-completed-session-failed-substantive-route-is-bounded-to-one-dev-new-per-unchanged-head-a-no-progress-or-bot-unfixable-finding-escalates-to-stalled-never-loops)) | Dispatcher (`mark_stalled`) | current PR `headRefOid` == last `Reviewed HEAD:` trailer (HEAD unchanged) AND EITHER (a) a `no-progress-substantive-attempt:<head>` marker already exists (a prior `dev-new` ran for this HEAD and produced no commit) OR (b) `dev_report_bot_unfixable` — the dev agent reported a PR-metadata `403 Resource not accessible by integration` / maintainer-only finding *within the current HEAD's review window* | one-time `no-progress-substantive:<head>` notice with @owner mention; NO further `dev-new` |
+| `stalled` | `−stalled` (issue is left `MergeMill`-only → re-enters via Step 2 `dispatch-new`) | Maintainer removes label | Maintainer | — | — |
+
+> **Note on the review-aware `pending-dev` transitions (rows above) — TWO dispatcher entry points ([INV-98](invariants.md#inv-98-the-step-4a5-same-head-pr-exists-park-is-not-terminal--a-completed-session-delegates-to-the-inv-35-router-only-the-residual-cases-park), #351):** the `Step 4 review-aware` transitions (`+in-progress` dev-new / `+pending-review` re-review / `+stalled` no-progress) are produced by `handle_completed_session_routing`, reached from EITHER (1) the tick's Step 4b terminal-state gate (when NO PR exists) OR (2) [Step 4a.5](dispatcher-flow.md#step-4a5-pr-exists-short-circuit-99-bug-3-106)'s same-HEAD branch **delegating** when a PR exists and the dev session is `completed`. These are the SAME transitions with the SAME guards — no new edge — but before #351 path (2) was unreachable (Step 4a.5 parked unconditionally), so after any review FAIL (which always leaves a PR) the issue deadlocked in `pending-dev`. `prompt_too_long` is excluded from the delegation and takes the [INV-12](invariants.md#inv-12-resume-only-against-unfinished-sessions) PTL `+in-progress` dev-new instead; the residual same-HEAD cases (no session id / non-completed / non-claude CLI) still park in `pending-dev` (no transition). **#351's fix was itself unreachable under `EXECUTION_BACKEND=remote-aws-ssm`** until [INV-101](invariants.md#inv-101-is_session_completed-is-authoritative-under-all-execution-backends--terminal-state-detection-consults-a-backend-specific-log-probe-mirroring-inv-30s-pid_alive-shape) (#356): both entry points' `completed`/`prompt_too_long` detection depends on `is_session_completed`, which read a controller-local path that always missed under the remote backend — so path (2) above stayed unreachable for remote-SSM projects specifically, even after #351 shipped, until #356's backend-aware log probe.
+
+> **Note on `+approved`:** the auto-merge-success path also removes `MergeMill` so the issue is no longer eligible for re-dispatch (and GitHub auto-closes the issue via the PR's `Closes #N` keyword — the wrapper itself does not call `gh issue close`, see [INV-33](invariants.md#inv-33-review-wrapper-must-not-close-the-linked-issue)). The `no-auto-close` and approval-failure paths keep `MergeMill` (the issue is not auto-closed; manual operator intervention completes the flow). The auto-merge-**failure** path is *not* in the `+approved` group: it transitions to `+pending-dev` with `MergeMill` retained, and the dispatcher Step 4 re-dispatches dev to rebase onto main.
+
+> **Note on `reviewDecision` ([INV-52](invariants.md#inv-52-the-review-wrapper-owns-the-github-native-pr-reviewmerge-action-the-agent-posts-verdicts-only)):** the GitHub-native PR review/merge action is **wrapper-owned**, not agent-owned. On a substantive FAIL the wrapper submits `gh pr review --request-changes` so `reviewDecision=CHANGES_REQUESTED` is authoritative for humans, branch protection, and the dev-resume agent; on a PASS the wrapper submits `gh pr review --approve` against the current HEAD, which supersedes any prior `CHANGES_REQUESTED` from that reviewer (so there is no permanently-stuck blocking state). The review **agent** posts a verdict comment only — an agent that runs `gh pr review`/`gh pr merge` itself is a defect (it races the [INV-44](invariants.md#inv-44-mergeable-hard-gate--a-conflicting-pr-can-never-reach-approved) mergeable gate and the `no-auto-close` skip-merge — the PR #191 incident). These `--request-changes`/`--approve` submissions are best-effort and do **not** change the label transition itself; a 403/transient failure is logged and the labels still flip.
+
+## Forbidden transitions
+
+These combinations must never happen. If you observe one, it's a bug:
+
+- **`in-progress` + `reviewing` simultaneously.** Both wrappers think they own the issue. Indicates either (a) a missed `−in-progress` on the dev wrapper exit path, (b) Step 3 dispatched review without first removing `pending-review`, or (c) external manual label edits.
+- **`pending-review` + `reviewing`.** Dispatcher Step 3 must atomically swap (`--remove-label pending-review --add-label reviewing` in one `gh issue edit` call).
+- **`pending-dev` + `in-progress`.** Same as above for Step 4 (`--remove-label pending-dev --add-label in-progress`).
+- **`approved` + any active state.** Once approved, the issue should be closed (auto-merge path) or stable (`no-auto-close` / approval-failure path). The dispatcher does not look at issues labeled `approved`. **Self-healed at Step 0** ([INV-25](invariants.md#inv-25-terminal-labels-approved-stalled-are-sticky-transitional-residue-is-healed-at-tick-start)) — if residue lands (wrapper crash between two label edits, [INV-15] SIGTERM race, manual reconciliation), the next tick's hygiene pass strips the transitional label and posts a one-shot audit comment.
+- **`stalled` + any other active state label.** When the dispatcher sets `stalled`, it removes the active state label in the same `gh issue edit` call. **Same Step 0 hygiene applies** ([INV-25](invariants.md#inv-25-terminal-labels-approved-stalled-are-sticky-transitional-residue-is-healed-at-tick-start)) — residue from a half-completed transition is healed at tick start.
+
+## Concurrent-modification semantics
+
+Two cases dominate the race surface:
+
+### Wrapper trap vs. dispatcher Step 5
+
+The dispatcher's Step 5a / 5b can edit labels on the same issue at the same time as the wrapper's exit trap. The two cases differ:
+
+- **Step 5b DEAD path**: the wrapper has already exited; trap already ran. The dispatcher reads the post-trap label state and decides. No live race — Step 5b sees the post-trap labels and chooses.
+
+- **Step 5a SIGTERM path**: now **convergent** ([INV-15](invariants.md#inv-15-step-5a-sigterm-race-is-non-deterministic), fixed in PR-6; subtree-reaping hardened for #109; kill-path rewritten in [Lane-GC PR-3, INV-114](invariants.md#inv-114-every-pipeline-initiated-kill-escalates-term--bounded-grace--sigkill-gated-on-groupscope-emptiness-never-on-leader-liveness-alone)). Dispatcher sends `kill $PID` (SIGTERM), then edits labels to `pending-review`. The wrapper's SIGTERM trap (installed via `install_agent_sigterm_trap` in `lib-agent.sh`) sets `RECEIVED_SIGTERM=1`, does `pkill -TERM -P $$` FIRST for the pre-spawn race window, then TERMs every pgid recorded in the lane registry (not just `_AGENT_RUN_PID` — the generalization that closes the review-side dead arm, where the main shell's `_AGENT_RUN_PID` is always empty since review agents run in fan-out subshells), escalating each to SIGKILL after a 5s grace if the group is still reachable (INV-114's group-emptiness escalation gate). The wrapper's `cleanup()` rewrites `exit_code 143 → 0` when `RECEIVED_SIGTERM=1 && PR_EXISTS>0`, then routes through the success branch to `+pending-review`. Both writers now agree on the target.
+
+  The dispatcher's own `gh issue edit` is retained as belt-and-suspenders: if the wrapper is wedged so hard that even the EXIT trap doesn't fire (e.g. SIGKILL escalation from `timeout --kill-after`), the dispatcher's edit still gets the label right. SIGTERM with no PR (operator kill, orphaned wrapper) still routes to `+pending-dev`, which is correct.
+
+  See [`docs/designs/dispatcher-stale-alive-with-pr.md`](../designs/dispatcher-stale-alive-with-pr.md) for the original design intent and [`docs/designs/wrapper-hangs-bundle.md`](../designs/wrapper-hangs-bundle.md) for the PR-6 convergence fix.
+
+### `JUST_DISPATCHED` skip
+
+Within a single dispatcher tick, an issue dispatched in Step 2/3/4 must not be evaluated by Step 5 in the same tick — its PID file may not yet exist (the wrapper is launching via `nohup` and racing the dispatcher). [INV-09](invariants.md#inv-09-just_dispatched-skip-rule) and the `JUST_DISPATCHED` array enforce this.
+
+### Concurrent reviews on the same PR
+
+A maintainer running `/q review` manually — or any out-of-band merge (manual, or the #191 agent self-merge) — can race with the dispatcher's review wrapper. The wrapper guards by checking PR state at **two** block gates ([INV-54](invariants.md#inv-54-the-pr-still-open-guard-gates-all-pass-chain-exits-not-just-pass)), each via the same `_pr_open_gate` helper: `gh pr view --json state` ≠ OPEN ⇒ `−reviewing` (no add) and exit silently. (a) At the **top of the `PASSED_VERDICT=true` chain**, hoisted ahead of the [INV-44](invariants.md#inv-44-mergeable-hard-gate--a-conflicting-pr-can-never-reach-approved) mergeable gate, so it short-circuits the `block-substantive`/`block-nonsubstantive` FAIL branches and the PASS approve/merge path. (b) At the [INV-46](invariants.md#inv-46-e2e-runs-once-in-a-dedicated-lane-before-the-review-fan-out--gated-not-per-agent) **E2E hard gate** (#195), after `_classify_e2e_gate` and before the `fail`/`block-nonsubstantive` cascade — so a PR merged WHILE the E2E lane ran (which completes before the fan-out, before any verdict) is also never flipped to `+pending-dev`. See [`review-agent-flow.md` § PR-open guard (INV-54)](review-agent-flow.md#pr-open-guard-inv-54) and [INV-08](invariants.md#inv-08-wrapper-exit-trap-is-idempotent-against-label-state).
+
+## Cross-references
+
+- [`dispatcher-flow.md`](dispatcher-flow.md) — what each "Dispatcher Step N" looks like up close.
+- [`dev-agent-flow.md`](dev-agent-flow.md), [`review-agent-flow.md`](review-agent-flow.md) — wrapper-trap details for each transition.
+- [`handoffs.md`](handoffs.md) — the five places where one actor's transition is the precondition for another.
+- [`invariants.md`](invariants.md) — the rules that constrain all of the above.
