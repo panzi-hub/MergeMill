@@ -1,0 +1,23 @@
+[
+  {
+    "number": 5,
+    "title": "second",
+    "labels": [ { "name": "MergeMill" }, { "name": "in-progress" } ],
+    "assignees": [ { "login": "alice" }, { "login": "bob" } ],
+    "comments": [
+      {
+        "author": { "login": "zxkane" },
+        "body": "hello",
+        "createdAt": "2026-01-01T00:10:00Z",
+        "url": "https://github.com/o/r/issues/5#issuecomment-200002"
+      }
+    ]
+  },
+  {
+    "number": 3,
+    "title": "first",
+    "labels": [ { "name": "MergeMill" }, { "name": "approved" } ],
+    "assignees": [],
+    "comments": []
+  }
+]

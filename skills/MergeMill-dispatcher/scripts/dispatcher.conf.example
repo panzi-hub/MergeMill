@@ -1,0 +1,121 @@
+# dispatcher.conf — 多项目调度器配置
+#
+# 查找优先级：
+#   $DISPATCHER_CONF                              （环境变量覆盖）
+#   $HOME/.MergeMill/dispatcher.conf             （默认位置）
+#   $XDG_CONFIG_HOME/MergeMill/dispatcher.conf   （XDG 备用位置）
+#
+# 由 `dispatcher-multi-tick.sh` 读取。每个 cron tick 遍历 PROJECTS[]
+# 并为每个项目运行一次 `dispatcher-tick.sh`。每次迭代在子 shell 中重新加载
+# 每个项目各自的配置值，因此设置不会在项目间泄漏。
+#
+# 每个 PROJECTS[] 条目是以下两种形式之一：
+#
+#   1. 指向独立的项目 MergeMill.conf 的 FILE PATH（PR-8 — 本地后端）。
+#      文件位于当前调度器所在机器上。当调度器和项目源码位于同一台机器时使用。
+#
+#   2. 内联元数据块 INLINE METADATA（PR-9, #62 — remote-aws-ssm 后端）。
+#      当调度器和项目源码位于不同机器时使用（项目位于通过 AWS SSM 访问的
+#      远程开发机）。调度器所在机器不需要项目的 MergeMill.conf——
+#      调度器所需的一切都在此处内联声明。
+#
+# 可在同一个数组中混合使用。
+
+# === 信任门控 ===
+# dispatcher-multi-tick.sh 拒绝加载组/其他用户可写或由不同用户拥有的
+# dispatcher.conf（CWE-94 缓解措施 — `source` 一个攻击者可写的文件等于
+# 任意代码执行）。推荐：文件权限 0644（或 0600 如果有密钥），父目录 0755。
+# 使用 MERGEMILL_TRUST_CONF=1 覆盖（仅在你明确知晓自己在做什么时使用）。
+
+PROJECTS=()
+
+# ---------------------------------------------------------------------------
+# 示例 1：本地项目（PR-8 — MergeMill.conf 在当前机器上）
+# ---------------------------------------------------------------------------
+PROJECTS+=( "/data/git/myrepo-local/scripts/MergeMill.conf" )
+
+# ---------------------------------------------------------------------------
+# 示例 2：远程项目（PR-9 — MergeMill.conf 在远程开发机上）
+# ---------------------------------------------------------------------------
+# 调度器机器使用这些变量扫描 Issue 并通过 SSM 调度。
+# 远程机器有自己的 MergeMill.conf 供 wrapper 使用。
+#
+# 必填项：
+#   PROJECT_ID, REPO        — 用于调度器向 GitHub API 发起调用
+#   EXECUTION_BACKEND=remote-aws-ssm
+#   SSM_INSTANCE_ID         — 运行 dispatch-local.sh + wrapper 的 EC2 实例
+#   SSM_REMOTE_PROJECT_DIR  — 远程机器上项目根目录的绝对路径
+#   SSM_REMOTE_PROJECT_ID   — 远程 PID/日志路径中使用的 project_id
+#
+# 自动推导：
+#   REPO_OWNER, REPO_NAME   — 从 REPO=owner/name 拆分
+#
+# 可选项（含默认值）：
+#   SSM_REGION         （默认 ap-southeast-1）
+#   SSM_REMOTE_USER    （默认 ubuntu）         — 远程机器上的 sudo -u 目标用户
+#   SSM_REMOTE_SHELL   （默认 bash）           — bash | zsh | sh；以登录 shell 运行
+#   SSM_REMOTE_PROFILE （默认空，不加载）       — 在执行 INNER_CMD 之前 source 的文件
+#                       例如 /home/ubuntu/.bash_aliases，用于设置交互式 shell
+#                       通常不会加载的环境变量
+#
+# GitHub App 认证（当 GH_AUTH_MODE=app 时）：
+#   DISPATCHER_APP_ID, DISPATCHER_APP_PEM   — 由 gh-app-token.sh 读取
+#
+# 背压准入门控（[Lane-GC PR-6]，设计文档见
+# docs/designs/lane-containment-gc.md §4-C6；INV-119）——这些控制远程机器
+# 自身的 dispatch-local.sh 门控（它们通过远程项目自己的 MergeMill.conf 在
+# 执行主机上生效，并非在此调度器端文件中生效——此处仅作为提醒列出；权威文档见
+# MergeMill.conf.example）：
+#   GATE_LOAD_PER_CORE, GATE_MIN_MEM_MB, GATE_SWAP_PCT, MAX_TOTAL_CONCURRENT
+#
+# DEFER_MARKER_MAX_AGE_SECONDS（默认 900，即 15 分钟）——界定远程存活探测
+# （liveness-check-remote-aws-ssm.sh）将执行主机上的 defer 标记视为足够新鲜
+# 以报告为 DEFERRED（而非回退到 ALIVE/DEAD 层）的最大时间。在调度器端设置
+# （由调度器自身的 SSM 查询读取，而非远程的 MergeMill.conf）。
+#
+# ISSUE_FILTER / ISSUE_SCAN_LIMIT（issue #436，[INV-121]）——每项目的 Issue
+# 选择范围。语法和语义与 MergeMill.conf.example 的 ISSUE_FILTER 块相同
+# （语法、多调度器两两不相交契约、MAX_CONCURRENT 变为每个分片的说明，以及
+# ISSUE_SCAN_LIMIT 的先限制后过滤截断指导——详见该文件，此处不重复）。
+#
+# 内联块字符集限制：不同于独立的项目 MergeMill.conf 文件（直接 source，
+# 无限制），此文件中的内联 ISSUE_FILTER 值在 eval 之前由 validate_inline_block
+# 验证——值中不得包含 `$`、反引号、`;`、`&`、`|` 或 `\`（CWE-95 纵深防御，
+# 防止通过配置值注入代码）。被拒绝的字符会使整个内联块大声失败（项目将被跳过
+# 并发出 WARN，而非静默截断）——不会回退到无过滤模式。大多数实际的标签/用户名
+# 值从不需要这些字符；如果确实需要，请为该任务使用独立的 MergeMill.conf 文件
+# （见上方示例 1），而非内联块。
+PROJECTS+=( '
+PROJECT_ID=projB
+REPO=myorg/projB
+EXECUTION_BACKEND=remote-aws-ssm
+SSM_INSTANCE_ID=i-0abc1234567890def
+SSM_REGION=ap-southeast-1
+SSM_REMOTE_USER=ubuntu
+SSM_REMOTE_SHELL=bash
+SSM_REMOTE_PROFILE=/home/ubuntu/.bash_aliases
+SSM_REMOTE_PROJECT_DIR=/data/git/projB
+SSM_REMOTE_PROJECT_ID=projB
+GH_AUTH_MODE=app
+DISPATCHER_APP_ID=3013418
+DISPATCHER_APP_PEM=/data/auth/projB.pem
+MAX_CONCURRENT=5
+MAX_RETRIES=3
+ISSUE_FILTER=label:box-tokyo
+ISSUE_SCAN_LIMIT=100
+' )
+
+# ---------------------------------------------------------------------------
+# 示例 3：另一个在不同 EC2 上的远程项目（每项目映射）
+# ---------------------------------------------------------------------------
+PROJECTS+=( '
+PROJECT_ID=projC
+REPO=myorg/projC
+EXECUTION_BACKEND=remote-aws-ssm
+SSM_INSTANCE_ID=i-0def4567890abc123
+SSM_REMOTE_PROJECT_DIR=/data/git/projC
+SSM_REMOTE_PROJECT_ID=projC
+GH_AUTH_MODE=app
+DISPATCHER_APP_ID=3013418
+DISPATCHER_APP_PEM=/data/auth/projC.pem
+' )

@@ -1,0 +1,275 @@
+# E2E Command Mode
+
+> **This reference applies only when `E2E_MODE=command` is set in `MergeMill.conf`.** For browser-driven UI smoke testing, see `e2e-verification.md`.
+
+This mode lets a project supply its own verify command instead of using Chrome DevTools MCP. It's the right shape for:
+
+- **Backend pipelines** — the artifact-of-truth lives in S3 / DDB / a database row, not on a page.
+- **CLI tools** — verification is "did the binary produce the expected output", not "is this button clickable".
+- **Libraries** — `npm pack && npm install ./pkg && node -e ...`, no preview URL.
+- **Infra-as-code / ML pipelines** — verify by reading deploy outputs, not by clicking around.
+
+---
+
+## Configuration
+
+In `MergeMill.conf`:
+
+```bash
+E2E_ENABLED="true"
+E2E_MODE="command"
+E2E_COMMAND='bash scripts/e2e-pr-stage.sh ${PR_NUMBER}'
+E2E_COMMAND_TIMEOUT_SECONDS=3600
+E2E_COMMAND_PRE_HOOKS='bash scripts/e2e-seed-pr-stage.sh ${PR_NUMBER}'   # optional
+E2E_COMMAND_EVIDENCE_PARSER='bash scripts/e2e-evidence.sh'
+```
+
+The wrapper expands `${PR_NUMBER}` literally at render time (not in shell). Always single-quote the assignment so your shell doesn't eagerly expand the placeholder when sourcing the conf file.
+
+| Field | Required | Purpose |
+|---|---|---|
+| `E2E_MODE=command` | yes | Selects this branch in the wrapper. |
+| `E2E_COMMAND` | yes | The verify command. Stdout/stderr go to `/tmp/e2e-${PROJECT_ID}-${PR_NUMBER}.log` ([INV-100](../../../docs/pipeline/invariants.md), #355 — keyed by project too, truncated at the start of each round). Exit code interpreted per Section "Exit-code semantics". |
+| `E2E_COMMAND_EVIDENCE_PARSER` | yes | Reads the log, emits a markdown evidence block to stdout (see "Evidence block contract"). |
+| `E2E_COMMAND_TIMEOUT_SECONDS` | no | Default 3600. Wrapper enforces via `timeout(1)`. Soft cap; for >60min E2E wait for the background-mode follow-up. |
+| `E2E_COMMAND_PRE_HOOKS` | no | Runs before the verify command (e.g. seed test data). Failure aborts E2E. |
+
+`E2E_ENABLED=true` with `E2E_MODE` unset is a fail-loud condition — projects must opt into a specific mode rather than implicitly inheriting `browser`.
+
+---
+
+## Project-side contract
+
+The project supplies two scripts.
+
+### 1. The verify command (`E2E_COMMAND`)
+
+- Reads its arguments, including any rendered `${PR_NUMBER}`.
+- Performs whatever real work the E2E entails (deploy a stage, submit a job, poll for completion, dump logs).
+- Streams informative output to stdout/stderr.
+- Exits 0 on success, non-zero on failure. Exit code 124 (from `timeout(1)`) signals TIMEOUT; the review agent (per Step 3 of the command-mode prompt block) treats it as FAIL but still runs the evidence parser to capture partial results.
+- Has access to whatever credentials the wrapper has (GitHub App token via the wrapper's auth, plus whatever the project's per-stage IAM affords).
+- Should be idempotent against retries — the wrapper may re-dispatch on subsequent ticks.
+
+### 2. The evidence parser (`E2E_COMMAND_EVIDENCE_PARSER`)
+
+- Takes the verify-command's log file as `$1`.
+- Reads the log + any artifact-of-truth (S3 objects, DDB rows, local files) the verify command produced.
+- Emits a markdown evidence block to stdout. The review agent (per the prompt instructions injected by `MergeMill-review.sh`) pastes it verbatim into a PR comment via `gh pr comment`.
+- The block MUST end with a SHA-bearing marker matching the PR's current HEAD commit:
+  ```
+  <!-- e2e-evidence: complete sha="<HEAD-SHA>" -->
+  ```
+  The review wrapper exposes the HEAD SHA via `${PR_HEAD_SHA}` in the prompt; the project's evidence parser MUST embed that SHA in the output. **The SHA binding is load-bearing for idempotency** — without it, a stale evidence comment from a prior commit would falsely satisfy a re-review of newer code. The review agent — not the wrapper — checks the SHA matches before reusing prior evidence; see Step 4 / Step 4b of the command-mode prompt block in `skills/MergeMill-dispatcher/scripts/MergeMill-review.sh`.
+- Returns 0 on success, non-zero if the log is malformed or required artifacts are missing.
+
+### Evidence block contract
+
+The markdown block MUST contain:
+
+1. A `## E2E Evidence` (or similar) top-level header.
+2. A summary table mapping each acceptance-criterion item from the issue body to a verifiable result. The review agent uses this to mark issue checkboxes.
+3. Pointers to authoritative artifacts (S3 keys, DDB rows, log timestamps) so the reviewer (human or agent) can spot-check.
+4. The marker `<!-- e2e-evidence: complete sha="<PR-HEAD-SHA>" -->` as the LAST line. The SHA is required — see the "Idempotency" section.
+
+Optional but recommended:
+
+- Comparison against a baseline (prod / main-branch result).
+- Visual confirmation section if the project requires human eyeballs (e.g. transcripts, generated images).
+- A "What this evidence does NOT cover" section for known limitations.
+
+The wrapper does NOT validate the structure beyond checking for the marker. The PR reviewer (human) and the review agent (LLM) are the structural reviewers — keep the format readable.
+
+### Optional structured AC-coverage artifact (INV-49, #183)
+
+The parser MAY **additionally** emit a machine-readable AC-coverage map so the review fan-out double-checks acceptance-criteria coverage **deterministically** instead of LLM-parsing the free-form markdown table (a re-worded header, merged cell, or truncated row can otherwise make the double-check miss a *failing* criterion). The parser already computes the per-criterion pass/fail when it builds the markdown table; this just exposes it.
+
+**The artifact is OPTIONAL — a parser that omits it keeps the exact pre-#183 behavior** (the review agents LLM-parse the free-form evidence comment, as since #182).
+
+**Emission contract.** Embed the JSON inside an HTML-comment fence anywhere in the evidence block. HTML comments render invisibly, so the posted comment stays readable, and the fence travels into the SHA-bound comment so it's recoverable on the idempotent reuse path:
+
+```
+<!-- ac-coverage:begin
+{ "<criterion-id-or-text>": "pass" | "fail", ... }
+ac-coverage:end -->
+```
+
+- A flat JSON object: keys are criterion ids/text, every value is exactly the string `"pass"` or `"fail"`.
+- The wrapper's command-mode E2E lane (`lib-review-e2e.sh::_extract_ac_coverage_artifact`) extracts the bytes between the fence lines and validates them with `jq`.
+
+**Fail-safe, not fail-open.** If the fence is absent, the JSON is unparseable, it isn't an object, or a value is outside `{pass, fail}`, the wrapper logs a warning and falls back to the free-form double-check (`E2E_AC_COVERAGE_FILE` is written empty). A malformed artifact **never** silently passes the gate and **never** crashes the lane. When `jq` is unavailable, the artifact is ignored (the structured check is an optimization, not a hard dependency).
+
+**Flow.** On a gate pass the lane writes the validated JSON (or empty) to the per-round sidecar `E2E_AC_COVERAGE_FILE` (`/tmp/e2e-ac-coverage-${PROJECT_ID}-${PR_NUMBER}-${RUN_ID}.json` — [INV-100](../../../docs/pipeline/invariants.md), #355: run-scoped so a same-PR retry on a later dispatcher tick cannot rewrite a file another lane is still reading; agents read the path via the exported `E2E_AC_COVERAGE_FILE` var, never construct it). When that sidecar is non-empty, each review agent's prompt prefers the structured map: it verifies each `## Acceptance Criteria` item from the map and only falls back to the free-form comment for a criterion absent from the map. The artifact is a **review double-check aid only** — it does NOT change the E2E hard gate (`_classify_e2e_gate` stays the INV-46 dual-signal rc + evidence decision).
+
+Example evidence block that emits the artifact:
+
+```markdown
+## E2E Evidence (auto)
+
+| Acceptance criterion | Result |
+|---|---|
+| raw.json has ≥3 distinct clusters | ✅ (4) |
+| verified.json has ≥3 named speakers | ❌ (2) |
+
+<!-- ac-coverage:begin
+{ "raw.json has >= 3 distinct clusters": "pass", "verified.json has >= 3 named speakers": "fail" }
+ac-coverage:end -->
+
+<!-- e2e-evidence: complete sha="<HEAD-SHA>" -->
+```
+
+> Scope is **command-mode only**. Browser-mode evidence is free-form by nature; there is no browser-mode structured equivalent.
+
+---
+
+## Exit-code semantics
+
+| `E2E_COMMAND` exit code | Agent action |
+|---|---|
+| 0 | run evidence parser → post comment → check evidence vs AC → PASS or FAIL based on coverage |
+| 124 | TIMEOUT (from `timeout`). Run evidence parser anyway (some pipelines write artifacts before late-stage cleanup); evidence block must annotate timeout context; agent decides PASS/FAIL on partial evidence. |
+| any other non-zero | **DO NOT** run the evidence parser (its input log is malformed). Post a failure comment with the verify-command exit code + a tail of the log file. FAIL. |
+
+The "TIMEOUT but recoverable" path exists because backend pipelines often have late-stage tail-end errors (cleanup races, monitor-tool glitches) that fire AFTER the artifact has actually landed. The evidence parser, not the verify command, is the source of truth for whether the artifact is acceptable on `EXIT_CODE=124`.
+
+The "skip parser on other failures" rule is critical: parsers are written to consume successful runs. Feeding them a half-written log from a hard failure leads to confusing parser crashes that mask the real failure cause.
+
+---
+
+## Onboarding example
+
+A backend pipeline project wants to validate that a fix to its transcription worker produces N-cluster output instead of the old broken 2-cluster output. The fix lives behind a PR-stage deployment.
+
+```bash
+# MergeMill.conf
+E2E_ENABLED="true"
+E2E_MODE="command"
+E2E_COMMAND='bash scripts/e2e-pr-stage.sh ${PR_NUMBER}'
+E2E_COMMAND_TIMEOUT_SECONDS=3600
+E2E_COMMAND_PRE_HOOKS='bash scripts/e2e-seed-pr-stage.sh ${PR_NUMBER}'
+E2E_COMMAND_EVIDENCE_PARSER='bash scripts/e2e-evidence.sh'
+```
+
+```bash
+# scripts/e2e-seed-pr-stage.sh
+#!/usr/bin/env bash
+# Pre-hook: copy fixture data from prod to the per-PR stage tables.
+set -euo pipefail
+PR="${1:?PR number required}"
+aws dynamodb get-item --table-name prod-Foo --key '{"pk":...}' --output json \
+  | jq '.Item' > /tmp/prod-row.json
+aws dynamodb put-item --table-name "pr-${PR}-Foo" --item file:///tmp/prod-row.json
+```
+
+```bash
+# scripts/e2e-pr-stage.sh
+#!/usr/bin/env bash
+# Verify command: kick off the workflow, poll until terminal, dump logs.
+set -euo pipefail
+PR="${1:?PR number required}"
+# ... submit, poll, assert, exit 0 on success ...
+```
+
+```bash
+# scripts/e2e-evidence.sh
+#!/usr/bin/env bash
+# Evidence parser: read log + artifacts, emit markdown block.
+set -euo pipefail
+LOG="${1:?log file required}"
+
+# Pull authoritative artifact metrics
+CLUSTERS=$(aws s3 cp "s3://...transcripts.../raw.json" - | jq '[.segments[].speaker] | unique | length')
+SPEAKER_MAP=$(aws s3 cp "s3://...transcripts.../verified.json" - | jq -r '.speaker_map')
+
+# PR_HEAD_SHA is exported by the wrapper — read it from env.
+HEAD_SHA="${PR_HEAD_SHA:?PR_HEAD_SHA must be set by the wrapper}"
+
+cat <<EVIDENCE
+## E2E Evidence (auto)
+
+| Acceptance criterion | Result |
+|---|---|
+| raw.json has ≥3 distinct clusters | $([ "$CLUSTERS" -ge 3 ] && echo "✅ ($CLUSTERS)" || echo "❌ ($CLUSTERS)") |
+| verified.json has ≥3 named speakers | $(...) |
+
+S3 artifacts:
+- s3://...transcripts.../raw.json
+- s3://...transcripts.../verified.json
+
+<!-- e2e-evidence: complete sha="${HEAD_SHA}" -->
+EVIDENCE
+```
+
+---
+
+## Idempotency
+
+Subsequent review-tick wrappers re-run the lane with the same `E2E_COMMAND`. To avoid burning compute on already-validated commits, the lane checks for an existing evidence comment on the PR whose marker SHA matches the current HEAD before invoking `E2E_COMMAND`.
+
+**Match criterion:** the comment must contain the exact substring
+```
+e2e-evidence: complete sha="<current-PR-HEAD-SHA>"
+```
+
+A plain marker (without `sha="..."`) does NOT match — that would let stale evidence from a prior commit silently satisfy a re-review of newer code, which was a real footgun in the pre-SHA design.
+
+If the comment SHA does not match the current HEAD SHA, the evidence is stale; the lane re-runs E2E from Step 1.
+
+**Since #182 ([INV-46](../../../docs/pipeline/invariants.md)) the WRAPPER enforces this skip.** The command-mode E2E now runs **once per review round, in the wrapper, in a dedicated SHELL lane** (`lib-review-e2e.sh::_run_command_e2e_lane`) **before** the review fan-out — not in each review agent's prompt. The lane re-fetches a SHA-matching evidence comment (`_fetch_sha_evidence`) before running anything and reuses it (`rc=0`, no pre-hook, no verify) when present. So the skip is no longer the agent's best-effort responsibility, and the pre-hook + verify run a single time regardless of `AGENT_REVIEW_AGENTS` count.
+
+---
+
+## Interaction with the multi-agent review wait/stall windows (INV-43, #172; INV-46, #182)
+
+> **Post-#182 ([INV-46](../../../docs/pipeline/invariants.md)):** the E2E runs ONCE in a wrapper lane before the review fan-out, so the review agents no longer run E2E at all — the original #172 failure mode (the diligent agent that ran the slow E2E being dropped as `unavailable`) cannot occur, because no review agent runs the E2E. The windows below still matter for the residual review-verdict wait and, critically, for the dispatcher not SIGTERMing the wrapper while its lane runs the E2E synchronously.
+
+When a project runs `E2E_MODE=command` with a slow `E2E_COMMAND_PRE_HOOKS` + a raised `E2E_COMMAND_TIMEOUT_SECONDS`, the wrapper's E2E lane can run for tens of minutes before the review fan-out even starts. Two windows are involved, and both must be sized for the E2E you dispatched.
+
+### 1. Verdict-poll budget — auto-scaled (handled by the wrapper)
+
+After the fan-out join, `MergeMill-review.sh` polls issue comments for each agent's verdict. That poll budget used to be a fixed 30 s (`6 × 5 s`). It is now **derived from `E2E_COMMAND_TIMEOUT_SECONDS`** when `E2E_MODE=command`:
+
+```
+poll attempts = max(6, ceil(E2E_COMMAND_TIMEOUT_SECONDS / 5))
+```
+
+So the wrapper is willing to wait at least as long as the E2E it asked the agent to run, and the early-exit short-circuit still settles the happy path in one round (~5 s) once every agent has posted a verdict. You do **not** need to tune this — it follows `E2E_COMMAND_TIMEOUT_SECONDS` automatically. A non-numeric / zero / unset timeout falls back to the legacy 30 s floor.
+
+### 2. `REVIEW_NEAR_SUCCESS_WINDOW_SECONDS` — operator must raise it
+
+The **dispatcher-side** crash-detection short-circuit (`REVIEW_NEAR_SUCCESS_WINDOW_SECONDS`, default 300 s — see [INV-24](../../../docs/pipeline/invariants.md)) is what stops the dispatcher from declaring a still-working review wrapper "crashed" and SIGTERMing it mid-E2E on the next tick. A command-mode E2E that runs a pre-hook build + verify can easily outlast 300 s.
+
+**Set `REVIEW_NEAR_SUCCESS_WINDOW_SECONDS` ≥ `E2E_COMMAND_TIMEOUT_SECONDS`** (plus a tick of headroom). Otherwise the dispatcher SIGTERMs the review wrapper before the diligent agent finishes its E2E, the killed CLI exits non-zero with no verdict, and that agent is dropped — exactly the bug #172 reports. The wrapper's auto-scaled poll budget (1) is necessary but not sufficient on its own; the dispatcher window (2) is the operator's responsibility because it lives in the dispatcher's `MergeMill.conf` / `dispatcher.conf`, not the review wrapper.
+
+```bash
+# Example: a 45-min container build + verify
+E2E_COMMAND_TIMEOUT_SECONDS=2700
+REVIEW_NEAR_SUCCESS_WINDOW_SECONDS=3000   # >= E2E timeout + headroom
+HEARTBEAT_INTERVAL_SECONDS=120            # keep the wrapper's pid_alive fresh
+```
+
+### 3. Duplicated pre-hook across fan-out agents — RESOLVED in #182 (INV-46)
+
+Pre-#182, each fanned-out agent ran `E2E_COMMAND_PRE_HOOKS` independently, so a slow pre-hook (e.g. a container image build) was dispatched once per agent per round — wasted CI minutes and registry churn, plus per-agent races on shared stage state. The interim mitigation was a prompt-side sibling-evidence re-check immediately before the pre-hooks; it shrank the duplicated window but, because all N agents started simultaneously, could not provably eliminate it (the prior "honest limitation, no silent cap" note).
+
+**#182 ([INV-46](../../../docs/pipeline/invariants.md)) lands the deferred strong guarantee.** The wrapper now runs the E2E in a dedicated SHELL lane (`lib-review-e2e.sh::_run_command_e2e_lane`) **once, before the review fan-out**. Because the fan-out has not started when the lane runs, the pre-hook **structurally cannot** run N times — it runs exactly once per review round regardless of `AGENT_REVIEW_AGENTS` count. The review agents are then pure code reviewers that READ the wrapper-posted evidence comment as input; they do not run E2E. Making pre-hooks idempotent and cache-aware is still good hygiene, but it is no longer load-bearing for de-duplication.
+
+### 4. Orphaned agent processes are reaped
+
+A dropped agent's CLI (launched under `timeout <AGENT_TIMEOUT>`, default 4 h) is reaped when the wrapper resolves verdicts — `MergeMill-review.sh` group-kills any still-running fan-out agent process group ([INV-23](../../../docs/pipeline/invariants.md) setsid PGID semantics) so a dropped agent does not keep running (and spending tokens) after its verdict can no longer count.
+
+---
+
+## When NOT to use command-mode
+
+- **Your project is a SaaS web app with a preview URL.** Use `browser` mode — that's what it's for.
+- **Your verify command takes >60 minutes.** The MVP runs synchronously inside the agent session, which has its own stalled-detection. Wait for the background-mode follow-up (tracked separately).
+- **You want the review agent to author evidence.** This mode requires the project to ship `E2E_COMMAND_EVIDENCE_PARSER`. The agent is the runner + judge, not the author.
+
+---
+
+## Cross-references
+
+- `e2e-verification.md` — the browser-mode counterpart (Chrome DevTools MCP, screenshot upload, login flow).
+- `decision-gate.md` — the PASS/FAIL gate the agent applies after E2E completes.
+- `docs/pipeline/review-agent-flow.md` — the wrapper's overall flow including the E2E branch dispatch.

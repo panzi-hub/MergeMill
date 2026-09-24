@@ -1,0 +1,485 @@
+name: CI
+
+# Two-tier CI (issue #238, INV-77):
+#
+#   Tier 1 — HERMETIC (jobs prefixed `hermetic-`): unit tests, ShellCheck,
+#     adapter conformance, and the stub-mode self-tests. Runs on every PR/push
+#     on `ubuntu-latest` with ZERO credentials, so a fork PR or external
+#     contributor gets a fully green, fully meaningful CI. These are the
+#     merge-required checks.
+#
+#   Tier 2 — LIVE (`live-smoke`): the #222 agent-CLI smoke matrix that needs
+#     authenticated CLIs (claude/codex/kiro/agy via IAM/quota). It runs ONLY on
+#     the self-hosted runner and ONLY when a maintainer applies the
+#     `run-live-smoke` label (pull_request `labeled`) OR on push to main. It is
+#     ADVISORY (non-required) — never block a fork PR on hardware/credentials
+#     only maintainers have.
+#
+# THREAT MODEL (why the label gate, not an unconditional self-hosted job):
+#   self-hosted runner + untrusted PR code = host compromise. A fork PR must NOT
+#   be able to schedule the live tier on its own. Applying the `run-live-smoke`
+#   label is the authorization act and requires write access (maintainer-only).
+#   We use plain `pull_request` (NOT `pull_request_target`): `pull_request_target`
+#   would run with the base repo's token/secrets against untrusted head code —
+#   the classic foot-gun. The `labeled` event still runs in the base-repo context
+#   but checks out the PR head, so the live tier must treat head code as
+#   untrusted (it runs only agent-CLI smokes, no head-controlled build steps).
+
+on:
+  pull_request:
+    branches: [main]
+    # `labeled` is required so applying `run-live-smoke` delivers the event that
+    # gates the live-smoke job (github.event.label.name).
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+
+jobs:
+  hermetic-unit:
+    name: Hermetic / Unit + conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Lets test-adapter-spec-schemas.sh (#229 / INV-66) run the full Draft-07
+      # path instead of the weaker jq structural fallback. The test passes
+      # either way; installing jsonschema makes CI exercise the strong path so
+      # the conditional/negative coverage is actually enforced in CI.
+      - name: Install python jsonschema (for adapter-spec schema validation)
+        run: python3 -m pip install --quiet jsonschema || pip3 install --quiet jsonschema || true
+
+      - name: Run all unit tests
+        run: |
+          failed=0
+          for test in tests/unit/test-*.sh; do
+            echo "::group::Running $test"
+            if bash "$test"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error::$test failed"
+              failed=1
+            fi
+          done
+          exit $failed
+
+      # agent-smoke harness E2E self-test (INV-63, #222): run the FULL matrix
+      # harness against stub CLIs so CI exercises it end-to-end without real
+      # CLIs/credentials. The stub matrix contains a deliberate FAIL entry, so
+      # the harness exits 1 by design — we assert on the SMOKE-SUMMARY tally
+      # rather than the exit code. This is the HERMETIC self-test of the harness;
+      # the LIVE matrix (real CLIs) is the separate label-gated live-smoke job.
+      - name: agent-smoke harness stub-mode self-test
+        run: |
+          out=$(SMOKE_STUB=1 bash tests/e2e/run-agent-smoke.sh) || true
+          echo "$out"
+          echo "$out" | grep -q 'SMOKE-SUMMARY pass=1 fail=1 unavailable=1 skip=1' || {
+            echo "::error::agent-smoke stub self-test did not produce the expected SMOKE-SUMMARY"
+            exit 1
+          }
+
+      # metrics-report E2E self-test (INV-70, #228): synthesize 3 months of
+      # events into a fixture and assert the four baseline numbers exactly. The
+      # harness exits 0 on success and prints METRICS-E2E-SUMMARY.
+      - name: metrics-report E2E fixture self-test
+        run: |
+          out=$(bash tests/e2e/run-metrics-report.sh)
+          echo "$out"
+          echo "$out" | grep -q 'METRICS-E2E-SUMMARY pass=10 fail=0' || {
+            echo "::error::metrics-report E2E self-test did not produce the expected summary"
+            exit 1
+          }
+
+      # Operator error-envelope E2E (INV-72, #231): a config-class abort surfaces
+      # a comment (code + remediation + marker) through the real lib-error.sh
+      # proxy-resolution path against a stub `gh`, and never mutates label state.
+      # No network / credentials — runs on bare ubuntu.
+      - name: error-envelope E2E (stub gh proxy)
+        run: bash tests/e2e/run-error-envelope-e2e.sh
+
+      # Adapter conformance suite (INV-74, #230): replay the promoted fixture
+      # manifests against TODAY's per-CLI classification path using STUB CLIs.
+      # This IS the always-on HERMETIC tier (#222's live smoke is the separate
+      # self-hosted tier). Fully credential-free — runs on any fork. Non-zero
+      # exit on ANY fixture FAIL, so the step gates the build directly.
+      - name: adapter conformance suite (hermetic)
+        run: bash tests/conformance/run-conformance.sh
+
+      # Verdict-artifact channel stub-fleet E2E (INV-77, #233): a 4-stub review
+      # fleet (valid / malformed / absent-with-comment / foreign-identity) drives
+      # the REAL artifact-first resolution + comment-fallback + INV-40 aggregation
+      # libs; asserts the aggregate, per-agent verdict sources, the loud malformed
+      # + foreign-identity envelopes, and the zero-comment-poll AC. No network /
+      # credentials — part of the always-on hermetic tier.
+      - name: verdict-artifact channel stub-fleet E2E
+        run: bash tests/e2e/run-verdict-artifact-fleet-e2e.sh
+
+      # Run-artifacts + status.sh E2E (INV-81, #235): a stub dev+review cycle
+      # populates durable run dirs (meta.json + run.log + drops.jsonl) under the
+      # XDG state root; asserts comment footers carry the run-id, status.sh's
+      # four-state output, and a reboot simulation (/tmp cleared) leaving the
+      # artifacts intact. No network / credentials — always-on hermetic tier.
+      - name: run-artifacts + status.sh E2E
+        run: |
+          out=$(bash tests/e2e/run-run-artifacts-e2e.sh)
+          echo "$out"
+          echo "$out" | grep -q 'RUN-ARTIFACTS-E2E-SUMMARY pass=' || {
+            echo "::error::run-artifacts E2E self-test did not produce the expected summary"
+            exit 1
+          }
+
+      # Lane-GC PR-3 kill-path fixture-tree E2E (issue #379, INV-111): drives
+      # the REAL, unmodified dispatch-local.sh CLI entry point against a
+      # genuine process-group fixture (leader dies on TERM, a persistent
+      # TERM-trapping member shares its pgid) through BOTH kill_stale_wrapper
+      # escalation sites (legacy PID-file path + pgrep-fallback orphan
+      # sweep). This is the issue's stated fixture-tree E2E acceptance
+      # criterion — "tree empty within grace+2s" — surfaced as its own CI
+      # job so a regression here is visible independent of the unit suite.
+      # No network / credentials — always-on hermetic tier.
+      - name: lane-gc-p3 kill-paths E2E (fixture tree)
+        run: |
+          out=$(bash tests/e2e/run-lane-gc-p3-kill-paths-e2e.sh)
+          echo "$out"
+          echo "$out" | grep -q 'LANE-GC-P3-KILL-PATHS-E2E-SUMMARY pass=2 fail=0' || {
+            echo "::error::lane-gc-p3 kill-paths E2E did not produce the expected summary"
+            exit 1
+          }
+
+      # Lane-GC PR-5 guardian sidecar E2E (issue #381, INV-118): drives the
+      # REAL, unmodified MergeMill-dev.sh CLI entry point (fixture gh +
+      # fixture claude on PATH) far enough to install its lane registry AND
+      # the guardian sidecar, then SIGKILLs the entire wrapper session — the
+      # non-graceful death class no in-process trap survives — and asserts
+      # the fixture agent process is gone within grace+2s and the lane's
+      # STATE promoted to reaped-by-guardian (proving the guardian, not an
+      # incidental OS reap, performed the teardown). No network /
+      # credentials — always-on hermetic tier.
+      - name: lane-gc-p5 guardian sidecar E2E (real wrapper, fixture CLI)
+        run: |
+          out=$(bash tests/e2e/run-lane-gc-p5-guardian-e2e.sh)
+          echo "$out"
+          echo "$out" | grep -q 'LANE-GC-P5-GUARDIAN-E2E-SUMMARY pass=5 fail=0' || {
+            echo "::error::lane-gc-p5 guardian E2E did not produce the expected summary"
+            exit 1
+          }
+
+      # Lane-GC PR-6 back-pressure admission gate E2E (issue #382, INV-119):
+      # drives the REAL, unmodified dispatch-local.sh CLI entry point through
+      # the gate's refusal->spawn lifecycle. TC-LGC6-E2E-01 injects synthetic
+      # box distress via the test-only override env vars and asserts exit 75
+      # + a defer marker + NO fixture wrapper spawn; TC-LGC6-E2E-02 repeats
+      # the SAME invocation with the overrides cleared and asserts exit 0 +
+      # a genuine fixture-wrapper spawn + defer-marker cleanup. No network /
+      # credentials — always-on hermetic tier.
+      - name: lane-gc-p6 back-pressure gate E2E (real dispatch-local.sh)
+        run: |
+          out=$(bash tests/e2e/run-lane-gc-p6-gate-e2e.sh)
+          echo "$out"
+          echo "$out" | grep -q 'LANE-GC-P6-GATE-E2E-SUMMARY pass=7 fail=0' || {
+            echo "::error::lane-gc-p6 back-pressure gate E2E did not produce the expected summary"
+            exit 1
+          }
+
+  # Executable-spec gate (INV-80, #236): the issue-label state machine is encoded
+  # in docs/pipeline/transitions.json; the mermaid diagram is GENERATED from it,
+  # and every guard/action + every dispatcher label-write must be declared. This
+  # job fails when code and the spec table drift. Pure docs/spec check — no
+  # credentials, no network — so it runs on a bare ubuntu-latest fork.
+  spec-drift:
+    name: Spec Drift
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 so the provider-cutover guard's strict monotonicity check
+      # (--require-trusted-ref, below) can resolve origin/main (the current tip of
+      # main, which carries the trusted cutover-baseline.json) and read its baseline.
+      # A shallow (depth-1) checkout has no origin/main, and under
+      # --require-trusted-ref an unresolvable trusted ref FAILs closed (#286 P1#1 — a
+      # permissive skip would let a PR add a raw-gh + regenerate the baseline and
+      # self-ratify). check-spec-drift.sh below is unaffected by depth.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      # (a) regenerate the state-machine.md mermaid region from transitions.json
+      #     and fail on any diff; (b) guard/action mapping + label-write
+      #     completeness. Same checker the unit test (test-spec-drift.sh) drives.
+      - name: Check spec/code drift
+        run: bash skills/MergeMill-dispatcher/scripts/check-spec-drift.sh
+
+      # Provider-cutover ratchet guard ([INV-91]): no NEW raw `gh` may re-enter the
+      # provider-neutral caller layer outside providers/. Run in strict mode
+      # (--require-trusted-ref) so a missing/unreadable trusted baseline FAILs closed
+      # rather than silently passing. Credential-free (jq + coreutils); same checker
+      # the unit test (test-provider-cutover.sh) drives.
+      - name: Check provider cutover (no new raw gh in caller layer)
+        run: bash skills/MergeMill-dispatcher/scripts/check-provider-cutover.sh --require-trusted-ref
+
+  hermetic-shellcheck:
+    name: Hermetic / ShellCheck + workflow lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Lint dispatcher scripts
+        run: |
+          shellcheck -S error \
+            skills/MergeMill-dispatcher/scripts/MergeMill-dev.sh \
+            skills/MergeMill-dispatcher/scripts/MergeMill-review.sh \
+            skills/MergeMill-dispatcher/scripts/dispatch-local.sh \
+            skills/MergeMill-dispatcher/scripts/dispatcher-tick.sh \
+            skills/MergeMill-dispatcher/scripts/lib-agent.sh \
+            skills/MergeMill-dispatcher/scripts/adapters/claude.sh \
+            skills/MergeMill-dispatcher/scripts/adapters/codex.sh \
+            skills/MergeMill-dispatcher/scripts/adapters/gemini.sh \
+            skills/MergeMill-dispatcher/scripts/adapters/kiro.sh \
+            skills/MergeMill-dispatcher/scripts/adapters/opencode.sh \
+            skills/MergeMill-dispatcher/scripts/adapters/agy.sh \
+            skills/MergeMill-dispatcher/scripts/lib-auth.sh \
+            skills/MergeMill-dispatcher/scripts/lib-config.sh \
+            skills/MergeMill-dispatcher/scripts/lib-dispatch.sh \
+            skills/MergeMill-dispatcher/scripts/lib-review-codex.sh \
+            skills/MergeMill-dispatcher/scripts/lib-review-agy.sh \
+            skills/MergeMill-dispatcher/scripts/lib-review-kiro.sh \
+            skills/MergeMill-dispatcher/scripts/lib-review-postfail.sh \
+            skills/MergeMill-dispatcher/scripts/lib-review-artifact.sh \
+            skills/MergeMill-dispatcher/scripts/lib-review-classify.sh \
+            skills/MergeMill-dispatcher/scripts/lib-review-resolve.sh \
+            skills/MergeMill-dispatcher/scripts/lib-review-request-changes.sh \
+            skills/MergeMill-dispatcher/scripts/lib-review-smoke.sh \
+            skills/MergeMill-dispatcher/scripts/lib-agent-smoke.sh \
+            skills/MergeMill-dispatcher/scripts/lib-metrics.sh \
+            skills/MergeMill-dispatcher/scripts/metrics-report.sh \
+            skills/MergeMill-dispatcher/scripts/lib-run-artifacts.sh \
+            skills/MergeMill-dispatcher/scripts/status.sh \
+            skills/MergeMill-dispatcher/scripts/lib-error.sh \
+            skills/MergeMill-dispatcher/scripts/gen-state-machine.sh \
+            skills/MergeMill-dispatcher/scripts/check-spec-drift.sh \
+            tests/unit/test-spec-drift.sh \
+            skills/MergeMill-dispatcher/scripts/check-provider-cutover.sh \
+            tests/unit/test-provider-cutover.sh \
+            tests/unit/test-provider-caps-branches.sh \
+            tests/e2e/run-agent-smoke.sh \
+            tests/e2e/run-metrics-report.sh \
+            tests/e2e/run-error-envelope-e2e.sh \
+            tests/e2e/run-run-artifacts-e2e.sh \
+            tests/e2e/run-verdict-artifact-fleet-e2e.sh \
+            tests/e2e/run-lane-gc-p3-kill-paths-e2e.sh \
+            skills/MergeMill-dispatcher/scripts/adt-gc.sh \
+            skills/MergeMill-dispatcher/scripts/install-gc-timer.sh \
+            skills/MergeMill-dispatcher/scripts/lib-lane.sh \
+            tests/e2e/run-lane-gc-p5-guardian-e2e.sh \
+            skills/MergeMill-dispatcher/scripts/lib-guardian.sh \
+            skills/MergeMill-dispatcher/scripts/liveness-check-remote-aws-ssm.sh \
+            tests/e2e/run-lane-gc-p6-gate-e2e.sh \
+            tests/conformance/run-conformance.sh \
+            tests/conformance/lib-conformance.sh \
+            skills/MergeMill-dispatcher/scripts/post-verdict.sh \
+            skills/MergeMill-dispatcher/scripts/setup-labels.sh \
+            skills/MergeMill-dispatcher/scripts/gh-token-refresh-daemon.sh \
+            skills/MergeMill-dispatcher/scripts/gh-with-token-refresh.sh \
+            skills/MergeMill-common/hooks/lib-push.sh \
+            skills/MergeMill-common/hooks/install-git-pre-push.sh \
+            skills/MergeMill-common/scripts/install-claude-hooks.sh \
+            skills/MergeMill-common/scripts/install-project-hooks.sh
+
+      # actionlint over the workflows — catches a `pull_request_target` foot-gun,
+      # expression typos, and shellcheck issues inside `run:` blocks. Pinned by
+      # commit SHA. This is the deeper syntax lint; the always-runnable
+      # gate-logic truth-table assertions live in
+      # tests/unit/test-ci-two-tier-lanes.sh (#238, INV-77) and run in the
+      # unit-test step above.
+      - name: actionlint (workflow syntax + foot-gun lint)
+        uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8 # v2.1.2
+        with:
+          files: ".github/workflows/*.yml"
+
+  live-smoke:
+    name: Live agent-smoke (self-hosted, label-gated)
+    # Gate: a maintainer applying the `run-live-smoke` label to a PR (the
+    # authorization act — label application needs write access), OR a push to
+    # main. A fork PR with no label NEVER reaches this job. There is no
+    # unconditional branch, so the live tier cannot self-trigger from untrusted
+    # PR code. See the THREAT MODEL note in the `on:` header above.
+    if: >-
+      (github.event_name == 'pull_request' && github.event.label.name == 'run-live-smoke')
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # Target the shared self-hosted pool via the operator's RUNNER_LABEL ternary
+    # (lazy &&/|| so an unset var falls back without an eager fromJSON crash).
+    # Default to bare `self-hosted` when the var is unset — a GitHub-hosted
+    # fallback would have no authenticated CLIs, defeating the live tier.
+    runs-on: ${{ vars.RUNNER_LABEL && fromJSON(vars.RUNNER_LABEL) || 'self-hosted' }}
+    env:
+      # Operator override for the machine-local matrix PATH. Empty when the
+      # `RUNNER_SMOKE_CONF` repo variable is unset; the preflight then tries the
+      # SMOKE_MATRIX content var, else the per-box default
+      # ($HOME/.config/MergeMill-dev-team/e2e.conf).
+      RUNNER_SMOKE_CONF: ${{ vars.RUNNER_SMOKE_CONF }}
+      # Self-provisioning source (preferred): the matrix CONTENT, stored in the
+      # `SMOKE_MATRIX` repo variable, materialized to a runner temp file at job
+      # time. The shared self-hosted pool is an ephemeral autoscaling spot fleet —
+      # a per-box file does NOT survive pool churn, so a repo variable that travels
+      # with the repo is the portable provisioning channel. Operator-trusted: the
+      # matrix env-setup is `eval`'d (same trust model as RUNNER_SMOKE_CONF / a
+      # local file), so this var is maintainer-only (setting a repo variable needs
+      # write access) and MUST NOT carry secrets — Bedrock entries use the runner's
+      # instance-role creds; key-based entries source a runner-local secrets file.
+      SMOKE_MATRIX: ${{ vars.SMOKE_MATRIX }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Preflight: resolve the live matrix config from OUTSIDE the checkout —
+      # `actions/checkout` defaults to `clean: true` (`git clean -ffdx`), which
+      # would wipe a gitignored `tests/e2e/e2e.conf` inside the checkout (the [P1]
+      # from PR #256's review). Source precedence (first hit wins):
+      #   1. $RUNNER_SMOKE_CONF — operator-set PATH to a runner-local matrix file.
+      #   2. $SMOKE_MATRIX      — the matrix CONTENT (repo variable), materialized
+      #      here to a runner TEMP file (via mktemp, outside the checkout). This is
+      #      the self-provisioning channel: the shared self-hosted pool is an
+      #      ephemeral autoscaling spot fleet, so a per-box file does not survive
+      #      pool churn — a repo variable travels with the repo and any pool runner
+      #      gets it (the cycle-11 [P1] fix).
+      #   3. $HOME/.config/MergeMill-dev-team/e2e.conf — stable per-box default
+      #      (works on a pinned, long-lived runner).
+      # The resolved path is exported to $GITHUB_ENV as SMOKE_CONF so the run step
+      # (and run-agent-smoke.sh, which honors the SMOKE_CONF override) read the same
+      # file. If none resolve, FAIL LOUD with a remediation pointer rather than
+      # letting run-agent-smoke.sh emit the opaque `FATAL: matrix not found`.
+      #
+      # SMOKE_MATRIX is consumed as a quoted shell env var (never `${{ }}`-inlined
+      # into the run block), so its content can never be parsed as workflow/shell
+      # syntax. It is operator-trusted (maintainer-only repo variable) — its
+      # env-setup is later `eval`'d by the harness, the same trust model as a
+      # runner-local file; it MUST NOT carry secrets.
+      - name: Preflight — live smoke matrix config present (outside checkout)
+        run: |
+          if [[ -n "${RUNNER_SMOKE_CONF:-}" ]]; then
+            SMOKE_CONF="$RUNNER_SMOKE_CONF"
+          elif [[ -n "${SMOKE_MATRIX:-}" ]]; then
+            # Materialize the repo-variable matrix content to a runner temp file
+            # OUTSIDE the checkout (git clean cannot reach it).
+            SMOKE_CONF="$(mktemp "${RUNNER_TEMP:-/tmp}/smoke-matrix.XXXXXX")"
+            printf '%s\n' "$SMOKE_MATRIX" > "$SMOKE_CONF"
+            echo "Materialized live smoke matrix from the SMOKE_MATRIX repo variable."
+          else
+            SMOKE_CONF="$HOME/.config/MergeMill-dev-team/e2e.conf"
+          fi
+          echo "SMOKE_CONF=$SMOKE_CONF" >> "$GITHUB_ENV"
+          if [[ ! -r "$SMOKE_CONF" ]]; then
+            echo "::error::Live smoke matrix not found — set the SMOKE_MATRIX repo variable, or RUNNER_SMOKE_CONF, or provision $HOME/.config/MergeMill-dev-team/e2e.conf"
+            {
+              echo "## Live agent-smoke matrix (#222) — NOT RUN"
+              echo ""
+              echo "No live smoke matrix was resolved. Provide ONE of (precedence order)."
+              echo ""
+              echo "> ⚠️ **Seed the matrix only from a TRUSTED template — never from this"
+              echo "> checkout.** On a labeled fork PR the checked-out \`tests/e2e/e2e.conf.example\`"
+              echo "> is attacker-controlled head content, and the harness \`eval\`s each entry's"
+              echo "> \`env-setup\` on the self-hosted runner. Always fetch the template from"
+              echo "> \`main\` (\`?ref=main\`) or a local trusted clone, then review it before use."
+              echo ""
+              echo "1. **\`SMOKE_MATRIX\` repo variable (recommended for the autoscaling pool)** —"
+              echo "   set it to the matrix CONTENT; the lane materializes it to a temp file at"
+              echo "   job time, so any pool runner gets it (no per-box provisioning). Seed from"
+              echo "   the template on \`main\` (NOT the PR checkout), review, then set it:"
+              echo ""
+              echo '   ```'
+              echo "       gh api repos/<owner>/<repo>/contents/tests/e2e/e2e.conf.example?ref=main \\"
+              echo "         --jq '.content' | base64 -d > /tmp/smoke-matrix.tmpl   # review it, then:"
+              echo "       gh variable set SMOKE_MATRIX --repo <owner>/<repo> --body-file /tmp/smoke-matrix.tmpl"
+              echo '   ```'
+              echo ""
+              echo "2. \`RUNNER_SMOKE_CONF\` repo variable — a PATH to a runner-local matrix file."
+              echo ""
+              echo "3. A per-box file (for a pinned, long-lived runner), seeded from \`main\`:"
+              echo ""
+              echo '   ```'
+              echo "       mkdir -p \"\$HOME/.config/MergeMill-dev-team\""
+              echo "       gh api repos/<owner>/<repo>/contents/tests/e2e/e2e.conf.example?ref=main \\"
+              echo "         --jq '.content' | base64 -d > \"\$HOME/.config/MergeMill-dev-team/e2e.conf\"   # review + edit"
+              echo '   ```'
+              echo ""
+              echo "The matrix MUST live OUTSIDE the repo checkout — \`actions/checkout\` runs"
+              echo "\`git clean -ffdx\`, which would delete a gitignored \`tests/e2e/e2e.conf\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Using live smoke matrix: $SMOKE_CONF"
+
+      # Run the #222 live matrix against the box's real CLIs + credentials, with
+      # the matrix read from $SMOKE_CONF (outside the checkout — the harness
+      # honors the SMOKE_CONF env override). rc contract (#222):
+      #   any FAIL → rc 1 (operator-side config/launch breakage — fails the job)
+      #   UNAVAILABLE (quota) / SKIP → non-blocking (rc 0).
+      # So a quota-walled agy yields UNAVAILABLE without failing the job. Because
+      # live-smoke is advisory (non-required), even a FAIL never blocks a PR's
+      # merge — it is a maintainer signal, surfaced in the job summary below.
+      - name: Run live agent-smoke matrix
+        run: |
+          set -o pipefail
+          out_file="$(mktemp)"
+          # Clean up on any exit path — live-smoke runs on a persistent
+          # self-hosted box, so a cancelled run must not leak the temp file.
+          trap 'rm -f "$out_file"' EXIT
+          rc=0
+          bash tests/e2e/run-agent-smoke.sh | tee "$out_file" || rc=$?
+          {
+            echo "## Live agent-smoke matrix (#222)"
+            echo ""
+            echo "Matrix: \`$SMOKE_CONF\` (outside the checkout — survives git clean)"
+            echo ""
+            echo "Exit code: \`${rc}\` (FAIL → 1; UNAVAILABLE/SKIP non-blocking)"
+            echo ""
+            echo '```'
+            grep -E '^SMOKE' "$out_file" || echo '(no SMOKE evidence lines captured)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+  # Always-on status reporter (Keesan12 request, PR #256 review): the label-gated
+  # `live-smoke` job NEVER runs on an unlabeled PR, so without this an unlabeled PR
+  # would show NO explanation of the live tier at all. This hermetic, credential-free
+  # job ALWAYS runs (no label gate) on `ubuntu-latest` and writes a non-failing
+  # `$GITHUB_STEP_SUMMARY` stating whether live-smoke ran or was intentionally
+  # skipped pending a maintainer `run-live-smoke` label. It never fails the build.
+  live-smoke-status:
+    name: Live agent-smoke status (always-on)
+    runs-on: ubuntu-latest
+    env:
+      # Did THIS event schedule the live tier? (label-applied PR OR push to main).
+      # Read via env (never `${{ }}`-inlined into run:) — injection-safe.
+      EVENT_NAME: ${{ github.event_name }}
+      LABEL_NAME: ${{ github.event.label.name }}
+      REF: ${{ github.ref }}
+    steps:
+      - name: Report live-smoke status
+        run: |
+          live_will_run="no"
+          if [[ "$EVENT_NAME" == "pull_request" && "$LABEL_NAME" == "run-live-smoke" ]]; then
+            live_will_run="yes"
+          elif [[ "$EVENT_NAME" == "push" && "$REF" == "refs/heads/main" ]]; then
+            live_will_run="yes"
+          fi
+          {
+            echo "## Live agent-smoke — status"
+            echo ""
+            echo "Hermetic tier (unit + ShellCheck + conformance) is the merge-required,"
+            echo "credential-free CI and runs on every PR/push."
+            echo ""
+            if [[ "$live_will_run" == "yes" ]]; then
+              echo "✅ **Live tier scheduled** for this event — see the \`Live agent-smoke\`"
+              echo "job for the SMOKE matrix results."
+            else
+              echo "⏭️ **Live tier intentionally SKIPPED** for this event (not a failure)."
+              echo ""
+              echo "The live agent-smoke matrix runs real authenticated CLIs on the"
+              echo "self-hosted runner and is **advisory (non-required)**. It is gated to"
+              echo "maintainer authorization: a maintainer applies the \`run-live-smoke\`"
+              echo "label (or it runs on push to \`main\`). A fork PR / unlabeled PR never"
+              echo "schedules it — so your PR is fully green on the hermetic tier without"
+              echo "any agent-CLI credentials."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
