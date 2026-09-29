@@ -152,6 +152,7 @@ run_dispatch() {
   # box under real swap pressure would otherwise defer every invocation
   # here with rc=75, independent of the code under test).
   ( cd "$PROJ" && \
+    MERGEMILL_PID_DIR="$PROJ/.pids" \
     _GATE_LOAD1_PER_CORE_OVERRIDE="0.1" \
     _GATE_MEM_AVAILABLE_MB_OVERRIDE="999999" \
     _GATE_SWAP_PCT_OVERRIDE="0" \

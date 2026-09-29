@@ -236,7 +236,7 @@ printf 'stale content' > "$log_file"
 _reset_session_log 510
 rc=$?
 assert_eq "TC-ISCR-008 rc=0" "0" "$rc"
-assert_eq "TC-ISCR-008 log truncated to 0 bytes" "0" "$(stat -c %s "$log_file")"
+assert_eq "TC-ISCR-008 log truncated to 0 bytes" "0" "$(wc -c <"$log_file" | tr -d '[:space:]')"
 if [[ -s "$STUB_CALLS" ]]; then
   echo -e "  ${RED}FAIL${NC}: TC-ISCR-008 remote stub invoked despite local backend"
   FAIL=$((FAIL + 1))

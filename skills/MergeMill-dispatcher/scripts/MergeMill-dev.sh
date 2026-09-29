@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # MergeMill-dev.sh — Wrapper for MergeMill development agent tasks.
 #
 # Ensures issue labels are ALWAYS updated regardless of agent exit status.
@@ -24,7 +24,12 @@ set -euo pipefail
 # class (#227). On a real (non-symlink) invocation the two are identical.
 _SELF="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 # Hand the project-side conf dir to the sourced libs: their own BASH_SOURCE now
 # points into the skill tree (we source via LIB_DIR), so they cannot recover the
 # project's scripts/ on their own. MERGEMILL_CONF_DIR keeps their conf lookup
@@ -1160,6 +1165,48 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------
 # Fetch issue context
 # ---------------------------------------------------------------------------
+# The provider read is intentionally complete for dispatcher decisions, but an
+# agent prompt must be bounded. A long-lived Issue can accumulate thousands of
+# progress/review comments; embedding the complete normalized array can exceed
+# the CLI/API input limit before the agent gets to the actual task. Preserve the
+# issue title/body and the newest review context, while making the omission
+# explicit inside the user-content envelope. The defaults keep the rendered
+# context comfortably below the 1 MiB Codex input ceiling even before the
+# workflow instructions and PR-inline comments are added.
+bound_agent_issue_context() {
+  local raw="$1"
+  local max_comments="${MERGEMILL_AGENT_CONTEXT_MAX_COMMENTS:-80}"
+  local comment_chars="${MERGEMILL_AGENT_CONTEXT_COMMENT_CHARS:-3000}"
+  local body_chars="${MERGEMILL_AGENT_CONTEXT_BODY_CHARS:-100000}"
+
+  [[ "$max_comments" =~ ^[0-9]+$ ]] || max_comments=80
+  [[ "$comment_chars" =~ ^[0-9]+$ ]] || comment_chars=3000
+  [[ "$body_chars" =~ ^[0-9]+$ ]] || body_chars=100000
+
+  jq -c --argjson max_comments "$max_comments" \
+    --argjson comment_chars "$comment_chars" --argjson body_chars "$body_chars" '
+    def trim_text($n):
+      if type == "string" and length > $n
+      then .[:$n] + "\n[MergeMill: text truncated for agent context budget]"
+      else . end;
+    .body = ((.body // "") | trim_text($body_chars))
+    | (.comments // []) as $all_comments
+    | ($all_comments | length) as $comment_count
+    | .comments = (
+        if $comment_count > $max_comments then
+          [{id:null, author:"MergeMill", authorKind:"self",
+            body:("[MergeMill: " + (($comment_count - $max_comments)|tostring)
+              + " older Issue comments omitted; newest comments follow]"),
+            createdAt:null}]
+          + ($all_comments[-$max_comments:])
+        else $all_comments end
+        | map(if .id == null then . else
+              .body = ((.body // "") | trim_text($comment_chars))
+              end)
+      )
+  ' <<<"$raw"
+}
+
 log "Fetching issue #${ISSUE_NUMBER} details..."
 # [INV-87] via itp_read_task (#296 B5; [W1b] #396) — the ABSTRACT contract:
 # the leaf returns a normalized object (labels as name strings, comments as
@@ -1167,6 +1214,7 @@ log "Fetching issue #${ISSUE_NUMBER} details..."
 # embeds the normalized object text verbatim (agent context, no parser
 # depends on the old raw-gh shape — #347 AC4).
 ISSUE_BODY=$(itp_read_task "$ISSUE_NUMBER" title,body,comments)
+ISSUE_BODY=$(bound_agent_issue_context "$ISSUE_BODY")
 
 # ---------------------------------------------------------------------------
 # Normalize mode: resume without session falls back to new

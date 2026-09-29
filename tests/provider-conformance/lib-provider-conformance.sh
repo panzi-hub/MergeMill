@@ -105,8 +105,9 @@ pcf_materialize_scratch() {
 }
 
 # pcf_isolated_path <stub_dir> — compute the R1-mandated isolated PATH: the
-# stub dir plus the directories hosting bash, coreutils (env), jq, and
-# grep/sed — nothing else, so the real `gh` is NEVER resolvable. Discovers
+# stub dir plus the directories hosting bash, coreutils and the small POSIX
+# toolset used by the provider leaves (`env`, `cat`, `paste`, `jq`,
+# `grep`/`sed`) — nothing else, so the real `gh` is NEVER resolvable. Discovers
 # each tool's dir via the CALLER's ambient `command -v` (run once, before the
 # subshell's PATH is narrowed) and de-duplicates so the isolated PATH is
 # short and stable. A tool that is not found (should not happen in any CI or
@@ -117,7 +118,7 @@ pcf_isolated_path() {
   local stub_dir="$1"
   local dirs=("$stub_dir") d seen existing
   local tool
-  for tool in bash env jq grep sed; do
+  for tool in bash env cat paste jq grep sed; do
     d="$(command -v "$tool" 2>/dev/null)" || continue
     d="$(dirname "$d")"
     seen=0

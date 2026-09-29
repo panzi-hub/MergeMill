@@ -48,12 +48,12 @@ NC='\033[0m'
 # the single-quoted jq expression following `jq -r ` anywhere in the wrapper that
 # is the auto-merge-marker selector (anchored on the `Auto-merge failed:` literal).
 extract_selector() {
-  awk '
-    /jq -r .*startswith\("Auto-merge failed:"\)/ {
-      match($0, /jq -r '\''([^'\'']+)'\''/, a)
-      if (a[1] != "") { print a[1]; exit }
-    }
-  ' "$DEV_WRAPPER"
+  local line selector
+  line="$(grep -m1 'jq -r .*startswith("Auto-merge failed:")' "$DEV_WRAPPER" || true)"
+  [[ -n "$line" ]] || return 0
+  selector="${line#*jq -r \'}"
+  selector="${selector%%\'*}"
+  printf '%s\n' "$selector"
 }
 
 JQ_SELECTOR=$(extract_selector)

@@ -3,7 +3,7 @@
 #
 # Locks down the phase-0 two-dir resolution contract ([INV-65]):
 #   CONF_DIR = dirname of the UNRESOLVED ${BASH_SOURCE[0]:-$0}  (conf lookup, INV-14)
-#   LIB_DIR  = dirname of `readlink -f "${BASH_SOURCE[0]:-$0}"`  (sibling sourcing
+#   LIB_DIR  = dirname of the resolved `${BASH_SOURCE[0]:-$0}`  (sibling sourcing
 #              from the real skill tree — no per-project lib symlink needed)
 #
 # The behavioral half (TC-ENTRY-SHIM-001..007) drives a tiny harness script
@@ -61,6 +61,11 @@ trap 'rm -rf "$TMPDIR"' EXIT
 # ---------------------------------------------------------------------------
 SKILL_TREE="$TMPDIR/skill/MergeMill-dispatcher/scripts"
 mkdir -p "$SKILL_TREE"
+if command -v realpath >/dev/null 2>&1; then
+  SKILL_TREE_REAL="$(realpath "$SKILL_TREE")"
+else
+  SKILL_TREE_REAL="$(readlink -f "$SKILL_TREE")"
+fi
 
 cat > "$SKILL_TREE/lib-harness.sh" <<'LIB'
 # sibling lib sourced by the entry; defines a marker function.
@@ -73,7 +78,12 @@ cat > "$SKILL_TREE/entry.sh" <<'ENTRY'
 set -euo pipefail
 _SELF="${BASH_SOURCE[0]:-$0}"
 CONF_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 # Source a sibling lib from the REAL tree (LIB_DIR), never CONF_DIR.
 source "${LIB_DIR}/lib-harness.sh"
 echo "CONF_DIR=$CONF_DIR"
@@ -89,7 +99,7 @@ echo ""
 echo "=== TC-ENTRY-SHIM-001: direct invocation ==="
 OUT=$(bash "$SKILL_TREE/entry.sh")
 assert_contains "001: CONF_DIR == skill tree (direct)" "CONF_DIR=$SKILL_TREE" "$OUT"
-assert_contains "001: LIB_DIR == skill tree (direct)" "LIB_DIR=$SKILL_TREE" "$OUT"
+assert_contains "001: LIB_DIR == skill tree (direct)" "LIB_DIR=$SKILL_TREE_REAL" "$OUT"
 assert_contains "001: lib sourced from LIB_DIR" "MARKER=LIB_SOURCED_OK" "$OUT"
 
 # ===========================================================================
@@ -102,7 +112,7 @@ mkdir -p "$PROJ_SCRIPTS"
 ln -s "$SKILL_TREE/entry.sh" "$PROJ_SCRIPTS/entry.sh"
 OUT=$(bash "$PROJ_SCRIPTS/entry.sh")
 assert_contains "002: CONF_DIR == project scripts (symlink dir preserved)" "CONF_DIR=$PROJ_SCRIPTS" "$OUT"
-assert_contains "002: LIB_DIR == skill tree (resolved)" "LIB_DIR=$SKILL_TREE" "$OUT"
+assert_contains "002: LIB_DIR == skill tree (resolved)" "LIB_DIR=$SKILL_TREE_REAL" "$OUT"
 assert_contains "002: lib sourced from skill tree, NO project lib symlink" "MARKER=LIB_SOURCED_OK" "$OUT"
 
 # ===========================================================================
@@ -120,7 +130,7 @@ mkdir -p "$NESTPROJ"
 ln -s "$SHARED/entry.sh" "$NESTPROJ/entry.sh"
 OUT=$(bash "$NESTPROJ/entry.sh")
 assert_contains "003: CONF_DIR == first hop (project scripts)" "CONF_DIR=$NESTPROJ" "$OUT"
-assert_contains "003: LIB_DIR == final real dir (skill tree)" "LIB_DIR=$SKILL_TREE" "$OUT"
+assert_contains "003: LIB_DIR == final real dir (skill tree)" "LIB_DIR=$SKILL_TREE_REAL" "$OUT"
 
 # ===========================================================================
 # TC-ENTRY-SHIM-004: symlinked entry sources lib from skill tree while
@@ -138,7 +148,12 @@ cat > "$SKILL_TREE/entry-conf.sh" <<'ENTRY'
 set -euo pipefail
 _SELF="${BASH_SOURCE[0]:-$0}"
 CONF_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 source "${LIB_DIR}/lib-harness.sh"
 PROJECT_ID="unset"
 [[ -f "${CONF_DIR}/MergeMill.conf" ]] && source "${CONF_DIR}/MergeMill.conf"
@@ -166,7 +181,12 @@ cat > "$SKILL_TREE/entry-newlib.sh" <<'ENTRY'
 set -euo pipefail
 _SELF="${BASH_SOURCE[0]:-$0}"
 CONF_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 source "${LIB_DIR}/lib-new.sh"
 echo "MARKER=$(new_lib_marker)"
 ENTRY
@@ -199,7 +219,7 @@ echo "=== TC-ENTRY-SHIM-006: legacy layout (per-lib symlink present) ==="
 ln -s "$SKILL_TREE/lib-harness.sh" "$PROJ_SCRIPTS/lib-harness.sh"
 OUT=$(bash "$PROJ_SCRIPTS/entry.sh")
 assert_contains "006: legacy per-lib symlink present → still works" "MARKER=LIB_SOURCED_OK" "$OUT"
-assert_contains "006: LIB_DIR still resolves to skill tree" "LIB_DIR=$SKILL_TREE" "$OUT"
+assert_contains "006: LIB_DIR still resolves to skill tree" "LIB_DIR=$SKILL_TREE_REAL" "$OUT"
 
 # ===========================================================================
 # TC-ENTRY-SHIM-007: BASH_SOURCE[0] empty (bash -c) — $0 fallback
@@ -217,7 +237,7 @@ echo "=== Source-level lockdown (production scripts) ==="
 
 # TC-ENTRY-SHIM-010: entry wrappers define a real-path LIB dir and use it for
 # lib sourcing.
-echo "TC-ENTRY-SHIM-010: entry wrappers compute LIB_DIR via readlink -f"
+echo "TC-ENTRY-SHIM-010: entry wrappers compute LIB_DIR via portable real-path resolution"
 for f in MergeMill-dev.sh MergeMill-review.sh; do
   content=$(cat "$DISPATCHER_SCRIPTS/$f")
   assert_contains "010: $f computes LIB_DIR via readlink -f" \

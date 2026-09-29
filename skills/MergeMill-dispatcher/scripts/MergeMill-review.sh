@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # MergeMill-review.sh — Wrapper for MergeMill review agent tasks.
 #
 # Reviews a PR linked to an issue, then either merges (pass) or sends back (fail).
@@ -25,7 +25,12 @@ set -euo pipefail
 # (non-symlink) invocation the two are identical.
 _SELF="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 # Hand the project-side conf dir to the sourced libs: their own BASH_SOURCE now
 # points into the skill tree (we source via LIB_DIR), so they cannot recover the
 # project's scripts/ on their own. MERGEMILL_CONF_DIR keeps their conf lookup

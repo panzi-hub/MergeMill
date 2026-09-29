@@ -13,6 +13,7 @@ FAIL=0
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LIB="$PROJECT_ROOT/skills/MergeMill-dispatcher/scripts/lib-agent.sh"
+TRUE_BIN="$(command -v true || printf '%s' true)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -84,7 +85,7 @@ else
 
   # TC-WH-002 (positive): command finishes before timeout passes through exit code
   AGENT_TIMEOUT=10s
-  _run_with_timeout /bin/true
+  _run_with_timeout "$TRUE_BIN"
   assert_rc "fast command (true) returns 0" 0 "$?"
 
   _run_with_timeout bash -c 'exit 7'
@@ -96,8 +97,8 @@ fi
 saved_cmd="${_AGENT_TIMEOUT_CMD:-}"
 _AGENT_TIMEOUT_CMD=""
 
-_run_with_timeout /bin/true
-assert_rc "fallback (no timeout binary): /bin/true → 0" 0 "$?"
+_run_with_timeout "$TRUE_BIN"
+assert_rc "fallback (no timeout binary): true → 0" 0 "$?"
 
 _run_with_timeout bash -c 'exit 5'
 assert_rc "fallback: command exit 5 passes through" 5 "$?"

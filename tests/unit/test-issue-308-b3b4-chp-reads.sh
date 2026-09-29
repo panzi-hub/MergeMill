@@ -68,7 +68,7 @@ assert_contains() {
 pass() { echo -e "  ${GREEN}PASS${NC}: $1"; PASS=$((PASS + 1)); }
 fail() { echo -e "  ${RED}FAIL${NC}: $1"; FAIL=$((FAIL + 1)); }
 
-export REPO=panzi-hub/MergeMill
+export REPO=zxkane/MergeMill-dev-team
 
 # The verbatim selectors the three sites pass (must survive byte-identically as a
 # SINGLE argv element). Kept here as the golden expectation; ${issue}/${sha} are

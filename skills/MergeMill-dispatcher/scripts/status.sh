@@ -25,7 +25,12 @@ set -euo pipefail
 # source from the skill tree regardless of per-project symlink coverage (#227).
 _SELF="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 
 # ---------------------------------------------------------------------------
 # Args

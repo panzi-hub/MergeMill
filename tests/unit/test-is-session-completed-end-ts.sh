@@ -88,7 +88,7 @@ echo "=== is_session_completed: third out-var (log-mtime-derived end-ts) ==="
 log_file=$(write_log 200 '{"type":"result","stop_reason":"end_turn","terminal_reason":"completed","duration_ms":5000}')
 # Use 2026-05-21 03:18:42 UTC as the reference mtime
 ref_epoch=1779333522  # 2026-05-21T03:18:42Z
-touch -d "@${ref_epoch}" "$log_file"
+TZ=UTC touch -t 202605210318.42 "$log_file"
 reason=""; end_ts=""
 is_session_completed 200 reason end_ts
 assert_eq "completed: reason captured" "completed" "$reason"
@@ -99,7 +99,7 @@ cleanup_log 200
 # PTL case
 log_file=$(write_log 202 '{"type":"result","subtype":"success","is_error":true,"api_error_status":400,"result":"Prompt is too long","stop_reason":"stop_sequence","session_id":"abc","usage":{"input_tokens":0},"terminal_reason":"prompt_too_long"}')
 ref_epoch_ptl=1779346800  # 2026-05-21T07:00:00Z
-touch -d "@${ref_epoch_ptl}" "$log_file"
+TZ=UTC touch -t 202605210700.00 "$log_file"
 reason=""; end_ts=""
 is_session_completed 202 reason end_ts
 assert_eq "PTL: reason" "prompt_too_long" "$reason"

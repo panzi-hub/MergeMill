@@ -256,7 +256,7 @@ assert_contains "010 stderr envelope carries remediation (P1-1)"       "Set E2E_
 make_stub_gh 0; : > "$CALLS"
 ( set -euo pipefail
   unset REPO GITHUB_REPO
-  export MERGEMILL_CONF_DIR="$TMPROOT/scripts" REPO_OWNER=zxkane REPO_NAME=MergeMill-dev-team
+  export MERGEMILL_CONF_DIR="$TMPROOT/scripts" REPO_OWNER=panzi-hub REPO_NAME=MergeMill
   source "$LIB"
   error_surface 231 ADT_CFG_MISSING_KEY "REPO unset" "REPO empty" "Set REPO in scripts/MergeMill.conf"
 ) 2>"$TMPROOT/e10b"; assert_rc "010b missing-REPO fallback returns 0" 0 $?

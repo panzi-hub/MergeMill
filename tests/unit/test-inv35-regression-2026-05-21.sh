@@ -292,7 +292,7 @@ assert_eq "REG-002 routing returns 0" "0" "$rc"
 assert_eq "REG-002 fallback dispatches dev-new (substantive default)" "dev-new:145 " "$_MOCK_DISPATCH_CALLS"
 assert_eq "REG-002 label swap to in-progress" "145:pending-dev:in-progress " "$_MOCK_LABEL_SWAPS"
 assert_contains "REG-002 INV-35-fresh-dev marker present" "INV-35-fresh-dev:" "$_MOCK_LAST_COMMENT_BODY"
-log_size=$(stat -c '%s' "$LOG_FILE_REG2" 2>/dev/null || echo "missing")
+log_size="$(wc -c <"$LOG_FILE_REG2" | tr -d '[:space:]')"
 assert_eq "REG-002 log truncated" "0" "$log_size"
 
 # Cleanup

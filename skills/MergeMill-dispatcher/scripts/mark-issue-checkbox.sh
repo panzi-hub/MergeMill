@@ -1,1 +1,1 @@
-../../autonomous-common/scripts/mark-issue-checkbox.sh
+../../MergeMill-common/scripts/mark-issue-checkbox.sh
