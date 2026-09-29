@@ -87,7 +87,17 @@ render_region() {
   printf '%s\n' "$BEGIN_MARKER"
   printf '```mermaid\n'
   # Remove trailing blank lines from body, then re-add exactly one newline.
-  printf '%s\n' "$body" | sed -e :a -e '/^\s*$/{$d;N;ba}'
+  # Use POSIX awk here rather than the GNU-sed-only `\s`/branch form.  This
+  # checker is also run by developers on macOS, whose BSD sed rejects that
+  # expression before it can compare the generated document.
+  printf '%s\n' "$body" | awk '
+    { lines[NR] = $0 }
+    END {
+      n = NR
+      while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--
+      for (i = 1; i <= n; i++) print lines[i]
+    }
+  '
   printf '```\n'
   printf '%s\n' "$END_MARKER"
 }

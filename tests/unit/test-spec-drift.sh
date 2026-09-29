@@ -147,7 +147,9 @@ else ok "DRIFT A detected (table edit → --check red)"; fi
 
 echo "=== TC-SPEC-GATE-013: DRIFT B — hand-edit inside the marker region → red ==="
 cp "$DOCS/state-machine.md" "$WORK/sm-drift.md"
-sed -i 's|MergeMill --> in_progress: Dispatcher Step 2 scan-new (deps resolved)|MergeMill --> in_progress: HAND EDITED|' "$WORK/sm-drift.md"
+sed 's|MergeMill --> in_progress: Dispatcher Step 2 scan-new (deps resolved)|MergeMill --> in_progress: HAND EDITED|' \
+  "$WORK/sm-drift.md" > "$WORK/sm-drift.tmp"
+mv "$WORK/sm-drift.tmp" "$WORK/sm-drift.md"
 if bash "$GEN" --check --transitions "$DOCS/transitions.json" --doc "$WORK/sm-drift.md" >/dev/null 2>&1; then
   bad "DRIFT B not detected (in-marker hand-edit should fail --check)"
 else ok "DRIFT B detected (in-marker hand-edit → --check red)"; fi
