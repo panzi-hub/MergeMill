@@ -6,7 +6,10 @@
 # file, and replays the full log inline on FAIL so CI annotations and
 # agents see the failure verbatim, uninterleaved (flock-serialized announce
 # step — a worker's PASS/FAIL line + log replay is always printed as one
-# atomic block, never spliced with a sibling worker's output).
+# atomic block, never spliced with a sibling worker's output; on platforms
+# without flock(1), e.g. macOS or Git Bash on Windows, the announce step
+# degrades to an unlocked print, matching the best-effort convention of
+# skills/MergeMill-dispatcher/scripts/lib-metrics.sh).
 #
 # A small SERIAL_TESTS bucket (below) lists tests that must not run
 # concurrently with anything; they run one at a time, after the parallel
@@ -110,7 +113,14 @@ _run_one() {
     fi
   fi
 
-  flock "$RUN_DIR/.out.lock" cat "$msg_file"
+  if command -v flock >/dev/null 2>&1; then
+    flock "$RUN_DIR/.out.lock" cat "$msg_file"
+  else
+    # No flock on this platform (macOS, Git Bash): print unlocked. Sibling
+    # blocks may interleave, but each worker still replays its own msg file
+    # and the tally below reads the files back, so results stay exact.
+    cat "$msg_file"
+  fi
 }
 export -f _run_one
 export RUN_DIR
