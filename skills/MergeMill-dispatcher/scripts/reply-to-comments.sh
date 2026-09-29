@@ -1,1 +1,1 @@
-../../autonomous-common/scripts/reply-to-comments.sh
+../../MergeMill-common/scripts/reply-to-comments.sh

@@ -1213,9 +1213,8 @@ log "Fetching issue #${ISSUE_NUMBER} details..."
 # the [INV-90] array); no gh flags or jq programs cross the seam. The prompt
 # embeds the normalized object text verbatim (agent context, no parser
 # depends on the old raw-gh shape — #347 AC4).
-ISSUE_BODY_RAW=$(itp_read_task "$ISSUE_NUMBER" title,body,comments)
-ISSUE_BODY=$(bound_agent_issue_context "$ISSUE_BODY_RAW")
-unset ISSUE_BODY_RAW
+ISSUE_BODY=$(itp_read_task "$ISSUE_NUMBER" title,body,comments)
+ISSUE_BODY=$(bound_agent_issue_context "$ISSUE_BODY")
 
 # ---------------------------------------------------------------------------
 # Normalize mode: resume without session falls back to new

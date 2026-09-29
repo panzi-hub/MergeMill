@@ -1,1 +1,1 @@
-../../autonomous-common/scripts/resolve-threads.sh
+../../MergeMill-common/scripts/resolve-threads.sh

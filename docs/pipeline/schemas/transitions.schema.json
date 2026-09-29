@@ -67,14 +67,14 @@
           "guards": {
             "description": "Preconditions that must all hold. Each token maps to a named function or greppable predicate via spec-guard-map.json.",
             "type": "array",
-            "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" }
+            "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*$" }
           },
           "actions": {
             "description": "Side effects performed as part of the transition. Label writes use the add-label:<L> / remove-label:<L> verb forms; other verbs (comment:*, sigterm-wrapper, request-changes) map to a named function or predicate via spec-guard-map.json.",
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^(add-label:[a-z][a-z0-9-]*|remove-label:[a-z][a-z0-9-]*|comment:[a-z][a-z0-9-]*|sigterm-wrapper|request-changes)$"
+              "pattern": "^(add-label:[A-Za-z][A-Za-z0-9-]*|remove-label:[A-Za-z][A-Za-z0-9-]*|comment:[A-Za-z][A-Za-z0-9-]*|sigterm-wrapper|request-changes)$"
             }
           },
           "mermaid": {
