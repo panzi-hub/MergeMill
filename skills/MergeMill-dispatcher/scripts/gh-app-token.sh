@@ -130,8 +130,12 @@ _app_install_token() {
   jwt=$(_generate_jwt "$app_id" "$pem_file") || return 1
 
   # Find the installation ID for this repository
+  # [INV-123] Time-bound both API calls: a stalled TCP connection (VPN drop,
+  # MTU black hole, hung proxy) otherwise blocks this daemon forever — it
+  # stays "alive" but never refreshes again. A timeout yields http_code=000,
+  # which the existing 2xx check below already rejects.
   local install_response
-  install_response=$(curl -s \
+  install_response=$(curl -s --connect-timeout 10 --max-time 30 \
     -H "Authorization: Bearer $jwt" \
     -H "Accept: application/vnd.github+json" \
     -w "\n%{http_code}" \
@@ -152,9 +156,10 @@ _app_install_token() {
     return 1
   }
 
-  # Exchange JWT for an installation access token
+  # Exchange JWT for an installation access token ([INV-123]: time-bounded,
+  # same rationale as the installation lookup above)
   local token_response
-  token_response=$(curl -s \
+  token_response=$(curl -s --connect-timeout 10 --max-time 30 \
     -X POST \
     -H "Authorization: Bearer $jwt" \
     -H "Accept: application/vnd.github+json" \

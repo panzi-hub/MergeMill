@@ -97,9 +97,21 @@ while true; do
   fi
 
   NEW_TOKEN=$(get_gh_app_token "$APP_ID" "$PEM_FILE" "$REPO_OWNER" "$REPO_NAME" "$PERMISSIONS_JSON") || {
-    ((FAIL_COUNT++))
+    # NOTE: assignment form, NOT `((FAIL_COUNT++))`. The post-increment
+    # evaluates to the OLD value (0 on the first failure), an arithmetic
+    # command whose result is 0 returns rc 1, and inside `set -euo pipefail`
+    # that killed the daemon on the very first transient failure — the
+    # MAX_CONSECUTIVE_FAILURES retry ladder below was unreachable dead code
+    # and even the WARNING log never printed. [INV-123]
+    FAIL_COUNT=$((FAIL_COUNT + 1))
     log "WARNING: Failed to refresh token (failure $FAIL_COUNT/$MAX_CONSECUTIVE_FAILURES), keeping existing"
     if [[ $FAIL_COUNT -ge $MAX_CONSECUTIVE_FAILURES ]]; then
+      # [INV-123] Give up only after MAX_CONSECUTIVE_FAILURES. By then the
+      # token on disk is guaranteed expired (MAX × REFRESH_INTERVAL ≫ the
+      # 60-min TTL), so remove it instead of leaving consumers a file that
+      # can only produce silent 401s — same posture as the parent-death
+      # cleanup above; consumers fail loud on the missing file.
+      rm -f "$TOKEN_FILE" 2>/dev/null || true
       log "FATAL: $MAX_CONSECUTIVE_FAILURES consecutive refresh failures. Exiting."
       exit 1
     fi
