@@ -6673,3 +6673,26 @@ _Triage (issue #236): [machine-checked: tests/unit/test-issue-filter.sh, tests/u
 
 ---
 
+
+## INV-122: the blocking hooks fail CLOSED on unparseable payloads, and `is_git_command` recognizes git invocations behind the wrapper forms agents habitually emit
+
+_Triage (issue #236): [machine-checked: tests/unit/test-hook-guard-hardening.sh]_
+
+**Rule**:
+
+1. **Fail-closed parse gate.** `block-push-to-main.sh` and `block-commit-outside-worktree.sh` MUST exit **2** (the only rc a PreToolUse hook treats as blocking) whenever the hook payload cannot be parsed — `parse_command` returns non-zero because jq is missing/broken or the JSON is malformed. A bare `command=$(parse_command "$input")` death under `set -e` exits 1, which PreToolUse semantics treat as a NON-blocking error: the tool call proceeds, i.e. the guard fails OPEN precisely when the host is least able to enforce it. The two hooks therefore gate the assignment with `|| { echo ERROR… >&2; exit 2; }`.
+2. **Wrapper-form coverage.** `is_git_command` MUST recognize genuine `git <op>` invocations behind the wrapper forms agents habitually emit (no adversarial intent required): (a) PATH-qualified interpreters (`/usr/bin/git push origin main`) — basename match on the interpreter token; (b) command substitution / subshells (`$(git push …)`, backticks) — their delimiters are segment separators like `&&`/`;`/`|`; (c) quoted `-c` payloads of `bash`/`sh`/`env` wrappers (`bash -c "git push origin main"`, `sh -c 'git commit …'`, including nested wrappers to depth 3, with `&&`/`;` inside the payload) — scanned as candidate command strings on the raw text, recursively. Pre-existing semantics are unchanged and regression-pinned: mentions inside ordinary quoted arguments (`gh issue create --body "see git push docs"`, `echo "git push"`) still never match; quoted args after NON-shell commands' `-c`-like flags stay inert; `git push-something` is still not a push; the #266 termination guarantees hold for every new loop (literal `${var/"${BASH_REMATCH[0]}"/ }` substitution, and BASH_REMATCH captured before any recursive call that would clobber it).
+
+**Why**: these hooks are the enforcement layer for the repo's mandatory workflow rules (worktree-only commits, no direct pushes to main). Two properties make a guard worse than no guard: failing open when its own dependency is unavailable (jq missing → rc 1 → "non-blocking error" → command runs, with no signal anything was skipped), and only recognizing the exact spelling of a command while the agents it gates habitually wrap that command (`bash -c`, absolute paths, subshells) — the bypass requires no intent, so it WILL be hit in ordinary operation. The pre-#266-era comments already framed the hook as defense-in-depth, not an adversarial boundary (`--no-verify` remains available by design); both fixes extend the depth of that defense to the forms real agents actually emit, without changing what counts as an "incidental mention".
+
+**Producer**: `skills/MergeMill-common/hooks/lib.sh` (`is_git_command` entry + `_is_git_command_scan`; `parse_json_field`'s non-zero rc contract on jq unavailability); the parse gates in `block-push-to-main.sh` and `block-commit-outside-worktree.sh`.
+
+**Consumer**: every agent CLI that fires these PreToolUse hooks (Claude Code, Kiro CLI; other IDEs follow the same rules manually), and the Layer-2 git-side hook installed by `install-git-pre-push.sh`, which parses the same command shape via `lib-push.sh`.
+
+**Status**: **ENFORCED**.
+
+**Test**: `tests/unit/test-hook-guard-hardening.sh` — TC-HGH-001..009 prove the wrapper forms match (absolute interpreter paths, `$(…)`, backticks, dq/sq `-c` payloads, env-prefixed, absolute-wrapper, payload containing `&&`); TC-HGH-010..015 pin the no-false-positive surface (quoted mentions inert, non-shell `-c` args inert, substring/operation mismatch); TC-HGH-016..017 prove depth-2 nesting matches and terminates (bounded `timeout 2` run, per the #266 test harness pattern); TC-HGH-018..023 prove the fail-closed gate end-to-end through the real hook scripts (baseline block/allow with jq present; `exit 2` with a failing jq shim prepended to PATH — portable across usrmerged systems; `exit 2` on malformed JSON).
+
+**Cross-references**:
+- #266 — the quote-strip termination discipline every new match-and-replace loop here inherits (quoted substitution; BASH_REMATCH captured before the recursive scan clobbers it).
+- #48 — the subcommand-position matcher whose semantics this invariant extends (basename matching and wrapper unwrapping) without altering.

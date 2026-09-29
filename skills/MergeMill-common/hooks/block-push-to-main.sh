@@ -15,7 +15,14 @@ source "$SCRIPT_DIR/lib.sh"
 source "$SCRIPT_DIR/lib-push.sh"
 
 input=$(read_hook_stdin)
-command=$(parse_command "$input")
+# [INV-122] Fail CLOSED: an unparseable payload (jq missing/broken, malformed
+# JSON) must block, not silently allow. Exit 2 is the ONLY blocking rc for a
+# PreToolUse hook — any other non-zero rc is a non-blocking error, so a bare
+# `command=$(parse_command …)` death under `set -e` (rc 1) used to fail open.
+command=$(parse_command "$input") || {
+  echo "ERROR: block-push-to-main: cannot parse hook payload (jq missing or malformed JSON); blocking conservatively. Install jq to restore normal operation." >&2
+  exit 2
+}
 
 # Only check git push commands
 if ! is_git_command "push" "$command"; then
