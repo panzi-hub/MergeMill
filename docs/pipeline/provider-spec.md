@@ -234,7 +234,7 @@ below is a dispatchable CHP verb — the full set this section normatively
 owns, **18 table rows naming 19 verbs** (one row, `chp_review_threads` /
 `chp_resolve_thread`, names two verbs sharing one contract cell). This
 includes the 11 named PR-lifecycle verbs (`chp_find_pr_for_issue` …
-`chp_close_keyword`), the 3 general read/write primitives added for the
+`chp_close_keyword`), the four general read+write primitives added for the
 incidental-PR-I/O sites (`chp_pr_view`/`chp_pr_list`/`chp_pr_comment`, #282
 review r8 / #329), and the 4 focused single-purpose verbs added by later PRs
 (`chp_list_inline_comments` #328, `chp_reply_review_comment` #327,

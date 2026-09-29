@@ -55,6 +55,18 @@ assert_not_contains() {
   if [[ "$haystack" != *"$needle"* ]]; then assert_pass "$desc"; else assert_fail "$desc (needle='$needle' unexpectedly found)"; fi
 }
 
+# BSD touch (macOS) does not accept GNU's `touch -d @<epoch>` form. Keep the
+# marker-freshness tests portable while retaining the exact epoch semantics.
+_touch_epoch() {
+  local epoch="$1" path
+  shift
+  if touch -d "@${epoch}" "$@" 2>/dev/null; then
+    return 0
+  fi
+  path="$(date -r "$epoch" '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "@${epoch}" '+%Y%m%d%H%M.%S')"
+  touch -t "$path" "$@"
+}
+
 for f in "$LIB_LANE" "$LIB_DISPATCH" "$DISPATCH_LOCAL" "$TICK" "$LIVENESS_DRIVER"; do
   [[ -f "$f" ]] || { echo -e "${RED}FATAL${NC}: $f not found"; exit 1; }
 done
@@ -87,6 +99,7 @@ REPO_NAME="test"
 PROJECT_DIR="$proj"
 AGENT_CMD="claude"
 GH_AUTH_MODE="token"
+MERGEMILL_PID_DIR="$proj/.pid"
 CONF
   local lf
   for lf in dispatch-local.sh lib-config.sh lib-lane.sh; do
@@ -573,7 +586,7 @@ _drive_snippet_defer_block() {
 STATE084="$TMPROOT/state084"; LANE_DIR084="$STATE084/MergeMill-testproj/lanes"
 mkdir -p "$LANE_DIR084"
 NOW084=$(date -u +%s)
-touch -d "@${NOW084}" "$LANE_DIR084/.attempt-issue-99" "$LANE_DIR084/.defer-issue-99"
+_touch_epoch "$NOW084" "$LANE_DIR084/.attempt-issue-99" "$LANE_DIR084/.defer-issue-99"
 OUT084=$(_drive_snippet_defer_block "$STATE084")
 assert_contains "TC-LGC6-084: fresh defer (same-run mtime, not superseded) -> DEFERRED" "DEFERRED" "$OUT084"
 
@@ -582,8 +595,8 @@ assert_contains "TC-LGC6-084: fresh defer (same-run mtime, not superseded) -> DE
 STATE085="$TMPROOT/state085"; LANE_DIR085="$STATE085/MergeMill-testproj/lanes"
 mkdir -p "$LANE_DIR085"
 NOW085=$(date -u +%s)
-touch -d "@$((NOW085 - 100))" "$LANE_DIR085/.defer-issue-99"
-touch -d "@${NOW085}" "$LANE_DIR085/.attempt-issue-99"
+_touch_epoch "$((NOW085 - 100))" "$LANE_DIR085/.defer-issue-99"
+_touch_epoch "$NOW085" "$LANE_DIR085/.attempt-issue-99"
 OUT085=$(_drive_snippet_defer_block "$STATE085")
 assert_eq "TC-LGC6-085: superseded defer (older than the latest attempt) falls through to DEAD, never shadows" "DEAD" "$OUT085"
 
@@ -592,7 +605,7 @@ assert_eq "TC-LGC6-085: superseded defer (older than the latest attempt) falls t
 STATE086="$TMPROOT/state086"; LANE_DIR086="$STATE086/MergeMill-testproj/lanes"
 mkdir -p "$LANE_DIR086"
 NOW086=$(date -u +%s)
-touch -d "@$((NOW086 - 100))" "$LANE_DIR086/.defer-issue-99"
+_touch_epoch "$((NOW086 - 100))" "$LANE_DIR086/.defer-issue-99"
 OUT086=$(_drive_snippet_defer_block "$STATE086")
 assert_contains "TC-LGC6-086: no attempt marker, defer within the age ceiling -> DEFERRED (documented fallback)" "DEFERRED" "$OUT086"
 
@@ -605,7 +618,7 @@ assert_contains "TC-LGC6-086: no attempt marker, defer within the age ceiling ->
 STATE087="$TMPROOT/state087"; LANE_DIR087="$STATE087/MergeMill-testproj/lanes"
 mkdir -p "$LANE_DIR087"
 NOW087=$(date -u +%s)
-touch -d "@$((NOW087 - 1000))" "$LANE_DIR087/.attempt-issue-99" "$LANE_DIR087/.defer-issue-99"
+_touch_epoch "$((NOW087 - 1000))" "$LANE_DIR087/.attempt-issue-99" "$LANE_DIR087/.defer-issue-99"
 OUT087=$(_drive_snippet_defer_block "$STATE087")
 assert_eq "TC-LGC6-087: not-superseded but past the age ceiling -> DEAD (age ceiling is a real second bound)" "DEAD" "$OUT087"
 

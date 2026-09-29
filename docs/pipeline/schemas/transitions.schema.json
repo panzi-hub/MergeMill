@@ -17,7 +17,7 @@
         "additionalProperties": false,
         "required": ["id", "label", "kind", "mermaid"],
         "properties": {
-          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "id": { "type": "string", "pattern": "^(MergeMill|[a-z][a-z0-9_]*)$" },
           "label": { "type": "string" },
           "kind": { "type": "string", "enum": ["pseudo", "active", "terminal"] },
           "mermaid": { "type": "string" }

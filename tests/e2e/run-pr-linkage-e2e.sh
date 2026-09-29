@@ -62,6 +62,14 @@ for ((i=0; i<${#args[@]}; i++)); do
   esac
 done
 [[ -f "$PR_FIXTURE" ]] || { echo ""; exit 0; }
+# The production CHP leaf now uses the provider contract's complete GraphQL
+# cursor walk (`gh api graphql`) rather than the retired `gh pr list -q` path.
+# Keep this fixture at the transport boundary: translate the compact fixture
+# shape into the GraphQL response that the real leaf validates and normalizes.
+if [[ "${args[0]:-}" == "api" && "${args[1]:-}" == "graphql" ]]; then
+  jq -c '{data:{repository:{pullRequests:{pageInfo:{hasNextPage:false,endCursor:null},nodes:[.[] | {number,headRefName,body,closingIssuesReferences:{nodes:[.closingIssuesReferences[]? | {number}]}}]}}}}' "$PR_FIXTURE"
+  exit $?
+fi
 if [[ -n "$q" ]]; then jq -c "$q" "$PR_FIXTURE" 2>/dev/null || echo ""; else cat "$PR_FIXTURE"; fi
 GH
 chmod +x "$BIN/gh"

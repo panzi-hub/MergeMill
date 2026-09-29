@@ -283,7 +283,8 @@ assert_grep "TC-CONFORMANCE-027b runner fails loud when stdin not fed" \
 # by replicating the runner's isolated PATH and resolving a stubbed binary.
 STUBP=$(mktemp -d); printf '#!/bin/bash\n' > "$STUBP/claude"; chmod +x "$STUBP/claude"
 CU="$(dirname "$(command -v env)")"
-resolved="$( PATH="$STUBP:$CU" bash -c 'command -v claude' )"
+BASH_DIR="$(dirname "$(command -v bash)")"
+resolved="$( PATH="$STUBP:$CU:$BASH_DIR" bash -c 'command -v claude' )"
 assert_eq "TC-CONFORMANCE-028 isolated PATH resolves claude to the stub, not a system CLI" \
   "$STUBP/claude" "$resolved"
 rm -rf "$STUBP"

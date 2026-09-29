@@ -36,7 +36,12 @@ REFRESH_INTERVAL="${GH_TOKEN_REFRESH_INTERVAL:-2700}"
 # separate unresolved CONF_DIR. On a real (non-symlink) invocation readlink -f
 # is identity, so LIB_DIR equals the daemon's own dir.
 _SELF="${BASH_SOURCE[0]:-$0}"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 source "${LIB_DIR}/gh-app-token.sh"
 
 log() { echo "[token-refresh] $(date -u +%H:%M:%S) $*"; }

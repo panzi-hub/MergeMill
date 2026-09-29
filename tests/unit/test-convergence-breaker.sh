@@ -641,7 +641,7 @@ assert_eq "CB-DUAL-011 exactly ONE terminal comment" "1" "$_MOCK_COMMENT_COUNT"
 assert_contains "CB-TRIP-001 report reason=non-convergence" "reason=non-convergence" "$_MOCK_LAST_COMMENT_BODY"
 assert_contains "CB-TRIP-001 report carries the marker" "<!-- dispatcher-convergence-breaker: issue=100 head=deadbeef trailer=" "$_MOCK_LAST_COMMENT_BODY"
 # Log NOT truncated on the halt path.
-log_size=$(stat -c '%s' "$_MOCK_LOG_FILE" 2>/dev/null || echo 0)
+log_size="$(wc -c <"$_MOCK_LOG_FILE" | tr -d '[:space:]')"
 if [[ "$log_size" != "0" ]]; then
   echo -e "  ${GREEN}PASS${NC}: CB-TRIP-001 log left intact (not truncated)"; PASS=$((PASS + 1))
 else

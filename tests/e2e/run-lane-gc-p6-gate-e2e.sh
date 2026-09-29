@@ -48,6 +48,7 @@ trap 'pkill -9 -f "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 PROJ="$TMP/proj"; mkdir -p "$PROJ/scripts"
 STATE_ROOT="$TMP/state"; mkdir -p "$STATE_ROOT"
+PID_ROOT="$TMP/pid"; mkdir -p "$PID_ROOT"
 WRAPPER_MARKER="$TMP/dev-wrapper-launched.marker"
 ISSUE_NUM=990601
 
@@ -84,6 +85,7 @@ echo "=== TC-LGC6-E2E-01: real dispatch-local.sh under injected pressure -> exit
 
 OUT01=$(
   ADT_STATE_ROOT="$STATE_ROOT" \
+  MERGEMILL_PID_DIR="$PID_ROOT" \
   _GATE_LOAD1_PER_CORE_OVERRIDE="99" \
   _GATE_MEM_AVAILABLE_MB_OVERRIDE="999999" \
   _GATE_SWAP_PCT_OVERRIDE="0" \
@@ -122,6 +124,7 @@ echo "=== TC-LGC6-E2E-02: SAME invocation with a healthy (uninjected) env -> exi
 
 OUT02=$(
   ADT_STATE_ROOT="$STATE_ROOT" \
+  MERGEMILL_PID_DIR="$PID_ROOT" \
   _GATE_LOAD1_PER_CORE_OVERRIDE="0.1" \
   _GATE_MEM_AVAILABLE_MB_OVERRIDE="999999" \
   _GATE_SWAP_PCT_OVERRIDE="0" \

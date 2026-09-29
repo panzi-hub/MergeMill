@@ -49,7 +49,12 @@ set -uo pipefail
 # project-agnostic and never loads MergeMill.conf, so unlike most entry
 # scripts there is no separate unresolved conf-dir to compute.
 _SELF="${BASH_SOURCE[0]:-$0}"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 
 # shellcheck source=lib-lane.sh
 source "${LIB_DIR}/lib-lane.sh"

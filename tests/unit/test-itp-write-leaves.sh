@@ -659,7 +659,7 @@ pv_out=$(
   bash -c 'unset -f gh; bash "$1" 202 pass "$2" codex sid-AAAA sonnet' _ \
     "$_PVSB/post-verdict.sh" "$_PVSB/body.md" 2>&1
 )
-pv_argv="$(cat "$_PVSB/argv.txt" 2>/dev/null | paste -sd' ')"
+pv_argv="$(cat "$_PVSB/argv.txt" 2>/dev/null | paste -sd' ' -)"
 pv_body="$(cat "$_PVSB/body.txt" 2>/dev/null)"
 assert_contains "TC-POSTVERDICT-PROXY post reaches the INV-56 proxy gh with issue-comment argv" \
   "issue comment 202 --repo o/r --body" "$pv_argv"

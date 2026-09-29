@@ -79,6 +79,14 @@ Disk is bounded to one extra generation per `(issue, type)` — `mv -f` discards
 
 To triage a crashed run after it has been re-dispatched, read `…-${ISSUE}.log.1` (the immediately-preceding run); `…-${ISSUE}.log` holds the latest run.
 
+Before the new wrapper is spawned, `kill_stale_wrapper()` also sweeps an
+orphaned wrapper tree when the PID file is absent. The sweep remains scoped to
+the project scripts directory, wrapper type, and an exact `--issue N` token.
+On macOS, where BSD `pgrep` may not match an interpreted script's command line
+consistently, it falls back to the process table and applies those same
+predicates to the full command line; it never widens the match to another
+project or wrapper type.
+
 **The only deliberate truncates are the recovery branches.** [INV-12](invariants.md#inv-12-resume-only-against-unfinished-sessions) (`prompt_too_long`, `dispatcher-tick.sh`) and [INV-35](invariants.md#inv-35-review-aware-resume-routing-for-completed-sessions) (`failed-substantive`, `lib-dispatch.sh`) intentionally `: > "$log"` the **current** per-issue log mid-cycle so the next tick's terminal-state gate doesn't re-read a stale `{"type":"result"}` line and dispatch dev-new forever. INV-68 does not change them — and because they clear `…-${ISSUE}.log` only (never `…-${ISSUE}.log.1`), even on the recovery path the immediately-prior run's log survives in the rotated generation.
 
 ## Tick lifecycle

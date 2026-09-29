@@ -79,8 +79,13 @@ run_scenario() {
   fi
 
   local outlog="$TMP/dispatch-out-${label}.log"
-  setsid env MERGEMILL_PID_DIR="$piddir" PROJECT_ID="e2e-lgc3-${label}" \
-    PROJECT_DIR="$projdir" KILL_STALE_PGREP_FALLBACK="$pgrep_fallback" \
+  setsid env MERGEMILL_PID_DIR="$piddir" ADT_STATE_ROOT="$TMP/state-${label}" \
+    PROJECT_ID="e2e-lgc3-${label}" PROJECT_DIR="$projdir" \
+    KILL_STALE_PGREP_FALLBACK="$pgrep_fallback" \
+    _GATE_LOAD1_PER_CORE_OVERRIDE="0" \
+    _GATE_MEM_AVAILABLE_MB_OVERRIDE="999999" \
+    _GATE_SWAP_PCT_OVERRIDE="0" \
+    _GATE_LIVE_LANE_COUNT_OVERRIDE="0" \
     bash "$DISPATCH_LOCAL" dev-new "$issue" >"$outlog" 2>&1 &
   local dispatch_sid=$!
 

@@ -36,6 +36,8 @@
 
 ## Acceptance Criteria
 
+> Classify each criterion as pre-merge verifiable and name the verification surface + expected evidence. A blocking criterion that cannot be satisfied before merge is a known driver of non-terminating dev↔review loops; split it into a non-blocking, non-MergeMill follow-up under Out of Scope.
+
 > **分类每个标准：是否可合并前验证？** 可合并前验证 =
 > 证据可在合并前获得 — **指明验证表面**（CI 作业、PR 预览 URL、
 > staging 命令或本地复现）**+ 预期证据**。不可合并前
@@ -51,6 +53,10 @@
 
 ## Dependencies
 <!--
+  IMPORTANT: List ONLY issues that must be closed/merged before this Issue starts.
+  The dispatcher parses this section literally; non-blocking references are silently skipped.
+  Do NOT list parent epics, issues this one unblocks, or context-only references.
+  If there are no blocking prerequisites, write exactly: None
   重要：仅列出在此 Issue 开始前必须先关闭/合并的 Issue。
   不要列出：
     - 此 Issue 解锁的 Issue（即依赖于此 Issue 的 Issue）
@@ -123,6 +129,8 @@
 - [ ] 端到端测试上述精确的复现步骤
 
 ## Acceptance Criteria
+
+> Classify each criterion as pre-merge verifiable and name the verification surface + expected evidence. A blocking criterion that cannot be satisfied before merge is a known driver of non-terminating dev↔review loops; split it into a non-blocking, non-MergeMill follow-up under Out of Scope.
 
 > **分类每个标准：是否可合并前验证？** 可合并前验证 =
 > 证据可在合并前获得 — **指明验证表面**（CI 作业、PR 预览 URL、

@@ -1,1 +1,1 @@
-../../autonomous-common/scripts/gh-as-user.sh
+../../MergeMill-common/scripts/gh-as-user.sh

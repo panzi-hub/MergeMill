@@ -45,11 +45,25 @@ fi
 # from the skill tree — no per-project lib symlink needed (#227).
 _SELF="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/MergeMill.conf" ]]; then
-  source "${SCRIPT_DIR}/MergeMill.conf"
-elif [[ -f "${SCRIPT_DIR}/../../../scripts/MergeMill.conf" ]]; then
-  source "${SCRIPT_DIR}/../../../scripts/MergeMill.conf"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
+# Keep the same three-tier configuration contract as the other entry points:
+# an explicit MERGEMILL_CONF override must reach project-side stable entry
+# scripts when dispatcher-tick.sh invokes dispatch-local.sh through a symlink.
+# The local/fallback checks remain for direct legacy invocation.
+source "${LIB_DIR}/lib-config.sh"
+if ! load_MergeMill_conf "$SCRIPT_DIR"; then
+  # Preserve direct invocation of a vendored copy, where the project config
+  # lives at the historical three-level fallback path and PROJECT_DIR is not
+  # available yet for lib-config.sh's project-root tier.
+  if [[ -f "${SCRIPT_DIR}/../../../scripts/MergeMill.conf" ]]; then
+    # shellcheck disable=SC1090
+    source "${SCRIPT_DIR}/../../../scripts/MergeMill.conf"
+  fi
 fi
 
 PROJECT_ID="${PROJECT_ID:-project}"
@@ -592,7 +606,7 @@ kill_stale_wrapper() {
   # Disabled via KILL_STALE_PGREP_FALLBACK=false for operators running
   # their own kill choreography.
   if [[ "${KILL_STALE_PGREP_FALLBACK:-true}" == "true" ]]; then
-    local orphan_pids project_re script_re
+    local orphan_pids project_re script_re expected_wrapper
     # `:-` defaults so unit tests sourcing this function in isolation don't
     # trip `set -u`. In production, both vars are validated at the top of
     # dispatch-local.sh.
@@ -601,14 +615,67 @@ kill_stale_wrapper() {
     # future refactor cannot silently widen the match across projects.
     project_re=$(printf '%s' "${PROJECT_DIR:-}/scripts/" | sed 's|[][\\.*^$+?(){}|]|\\&|g')
     case "${TYPE:-}" in
-      dev-new|dev-resume) script_re="${project_re}MergeMill-dev\\.sh" ;;
-      review)             script_re="${project_re}MergeMill-review\\.sh" ;;
+      dev-new|dev-resume) script_re="${project_re}MergeMill-dev\\.sh"; expected_wrapper="MergeMill-dev.sh" ;;
+      review)             script_re="${project_re}MergeMill-review\\.sh"; expected_wrapper="MergeMill-review.sh" ;;
       *)                  script_re="${project_re}MergeMill-(dev|review)\\.sh" ;;
     esac
     # `pgrep -f` matches against the full command line (argv[0] + args).
     # The `[-]-` trick keeps the matcher itself off the result list.
     orphan_pids=$(pgrep -f "${script_re}.*[-]-issue ${ISSUE_NUM}\b" 2>/dev/null \
       | grep -vw "$$" || true)
+    # BSD pgrep does not implement GNU grep's `\b` word-boundary escape. Keep
+    # the canonical matcher above for Linux and retry with an explicit numeric
+    # boundary on macOS so the same-type orphan is still reaped.
+    if [[ -z "$orphan_pids" ]]; then
+      orphan_pids=$(pgrep -f "${script_re}.*[-]-issue ${ISSUE_NUM}([^0-9]|$)" 2>/dev/null \
+        | grep -vw "$$" || true)
+    fi
+    # Some BSD pgrep builds accept the pattern but do not match the command
+    # line consistently when the issue-boundary expression is combined with
+    # an escaped path. Keep the process-name/path lookup in pgrep, then apply
+    # the token boundary to each candidate's real command line. This is also
+    # safer than dropping the boundary entirely: issue 9 must never match 99.
+    # `pgrep -f` can report the invoking shell when its `bash -c` argument
+    # contains the wrapper text (notably on macOS, where KERN_PROCARGS2
+    # exposes the complete argument string). Exclude this process and its
+    # ancestors before any kill walk; they are never orphan agents.
+    local -A _self_tree_pids=()
+    local _self_tree_pid _self_tree_parent
+    _self_tree_pid="$$"
+    while [[ "$_self_tree_pid" =~ ^[0-9]+$ && -z "${_self_tree_pids[$_self_tree_pid]:-}" ]]; do
+      _self_tree_pids["$_self_tree_pid"]=1
+      _self_tree_parent=$(ps -o ppid= -p "$_self_tree_pid" 2>/dev/null | tr -d ' ' || true)
+      [[ "$_self_tree_parent" =~ ^[0-9]+$ && "$_self_tree_parent" != "0" ]] || break
+      _self_tree_pid="$_self_tree_parent"
+    done
+    local _filtered_orphan_pids _candidate_pid
+    _filtered_orphan_pids=""
+    while IFS= read -r _candidate_pid; do
+      [[ "$_candidate_pid" =~ ^[0-9]+$ ]] || continue
+      [[ -z "${_self_tree_pids[$_candidate_pid]:-}" ]] || continue
+      _filtered_orphan_pids="${_filtered_orphan_pids:+$_filtered_orphan_pids$'\n'}$_candidate_pid"
+    done <<<"$orphan_pids"
+    orphan_pids="$_filtered_orphan_pids"
+
+    if [[ -z "$orphan_pids" ]] && [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+      # macOS pgrep can miss an interpreted script's path when the process is
+      # represented as `bash <script> ...` (the exact shape used by launchd and
+      # by the orphan fixture). Enumerate the already-filtered process table
+      # instead, then apply the same project/type/issue predicates to the full
+      # command line. This keeps the fallback narrow without depending on BSD
+      # pgrep's regex dialect or argv[0] choice.
+      local _candidate _candidate_cmd _ps_line
+      while IFS= read -r _ps_line; do
+        read -r _candidate _candidate_cmd <<<"$_ps_line"
+        [[ "$_candidate" =~ ^[0-9]+$ ]] || continue
+        [[ "$_candidate" == "$$" ]] && continue
+        [[ -z "${_self_tree_pids[$_candidate]:-}" ]] || continue
+        [[ "$_candidate_cmd" == *"${PROJECT_DIR}/scripts/${expected_wrapper}"* ]] || continue
+        if [[ "$_candidate_cmd" =~ --issue[[:space:]]${ISSUE_NUM}([[:space:]]|$) ]]; then
+          orphan_pids="${orphan_pids:+$orphan_pids$'\n'}$_candidate"
+        fi
+      done < <(ps -axo pid=,command= 2>/dev/null || true)
+    fi
     if [[ -n "$orphan_pids" ]]; then
       echo "Found orphan ${TYPE:-?} agent process(es) for issue #${ISSUE_NUM} (project ${PROJECT_ID:-?}): $(tr '\n' ' ' <<<"$orphan_pids")— group-killing" >&2
       # [Lane-GC PR-3 / INV-111] Walk each orphan's DESCENDANT TREE and

@@ -28,7 +28,7 @@ REPO=$(glab repo view -F json | jq -r '.path_with_namespace')
 
 ## 流程
 
-### 步骤 1：理解请求
+### Step 1: Understand the Request
 
 当用户描述功能或 Bug 时，通过澄清问题收集上下文。不要立即创建 Issue。
 
@@ -40,13 +40,15 @@ REPO=$(glab repo view -F json | jq -r '.path_with_namespace')
 - 与哪些现有功能相关？
 - 优先级和范围约束
 
-**对于 Bug，澄清：**
+**For bugs, clarify:**
 - 复现步骤
 - 预期行为 vs 实际行为
 - 环境（prod、staging、PR 预览）
 - 严重性（阻塞、降级、外观）
 - 任何错误消息或日志
 - **对于修复的每个验收标准，它是否可合并前验证？** Bug 修复通常有多个 AC——分类**每一个**，而不仅仅是标题"回归测试在修复前失败、修复后通过"（这条默认是可合并前验证的——指明表面：CI `unit`/E2E 作业）。警惕将任何标准描述为*合并后/生产重放*（"通过部署流水线重放失败的批次来验证"）：如果现有 PR 预览/staging 路径已用相同输入锻炼了相同代码路径，将该标准指向该表面。若某标准确实只能在部署后确认，将其拆分为单独的**非阻塞、非 `MergeMill` 后续 Issue**（参见 **`references/ac-verification.md`**）。此按标准分类对 Bug 修复同样适用，与功能需求一样——无论 Issue 类型如何，流水线无法在合并前满足的阻塞性 AC 是已知的无法终止的 dev↔review 循环的驱动因素。（注意：Bug 的 `## Environment` 字段可合法地为 `prod`——那是*复现*环境，而非验收标准。）
+
+For bugs, this acceptance-criteria classification applies to **both** issue types. For each acceptance criterion, ask whether it is **pre-merge verifiable**; the bug-clarify prompt must say **for each acceptance criterion** what surface and expected evidence prove it.
 
 每轮提出 2-3 个聚焦的问题。在有足够信息编写清晰的 Issue 后停止。
 
@@ -74,7 +76,7 @@ REPO=$(glab repo view -F json | jq -r '.path_with_namespace')
 4. 向 Issue 正文添加 `## Pre-existing Changes` 部分
 5. 附加后可选择清理本地变更
 
-### 步骤 4：与用户确认
+### Step 4: Confirm with User
 
 向用户展示 Issue 草稿：
 1. 建议标题（简洁、具描述性）
@@ -88,6 +90,8 @@ REPO=$(glab repo view -F json | jq -r '.path_with_namespace')
 
 **建议性可合并前验证自检**（你是 linter——无运行时脚本）：对草稿的 **AC 复选框行**（`## Acceptance Criteria` 下的 `- [ ]` 行，而非其他字段——这避免了 Bug 模板的 `## Environment` 字段的误报，其 `Stage:` 值可合法地为 `prod`）进行自检，寻找表示不可合并前验证 AC 的措辞：
 `post-merge`、`after merge`、`in production`、**以及长尾**——`live users`、`soak`、`rollout`、`approver`、`prod telemetry`、`manual smoke`。如果**阻塞性** AC 匹配且没有配对的后续 Issue 拆分，**警告作者（建议性，非阻塞）** 并按 **`references/ac-verification.md`** §3 提供拆分（创建非阻塞、非 `MergeMill` 的后续 Issue；在 `## Out of Scope` 下引用，绝对不在 `## Dependencies` 下）。不要在匹配时硬性拒绝草稿。
+
+This advisory self-scan checks **AC checkbox lines** only. Look for `after merge`, `in production`, and long-tail terms such as `soak` or `rollout`; warn the author and suggest a follow-up, but do not reject the draft.
 
 ### 步骤 5：创建 Issue
 
@@ -134,25 +138,26 @@ Issue 创建且 Issue 编号已知后：
 - 仅 `MergeMill` = AI 处理 dev/test/review **并**在通过后自动合并
 - `MergeMill` + `no-auto-close` = AI 处理 dev/test/review 但**在合并前停止**，通知所有者手动批准
 
-## 编写指南
+## Writing Guidelines
 
 - **标题**：以动词开头，保持具体。"Add pagination to plans list page" 而非 "Plans page improvement"
 - **正文**：为能访问完整代码库但无此对话口头上下文的 AI 开发者编写
 - **验收标准**：必须可客观验证，不可主观
+- **AC verification surface**: for each acceptance criterion, name the verification surface and expected evidence; classify it as pre-merge verifiable or not pre-merge verifiable.
 - **AC 验证表面**：对于每个验收标准，将其分类为**可合并前验证**（证据可在合并前获得——**指明表面**：CI 作业、PR 预览 URL、staging 命令或本地复现——加上预期证据）vs **不可合并前验证**（需要部署/生产、真实用户、时间浸泡、外部审批、生产遥测或 bot 缺少的凭据）。优先前者，始终**指明表面 + 预期证据**而非仅断言结果。确实不可合并前验证的标准应放入单独的**非阻塞、非 `MergeMill` 后续 Issue**（在 `## Out of Scope` 下引用，绝不在 `## Dependencies` 下）——将其保留为阻塞性 AC 是已知的无法终止的 dev↔review 循环的驱动因素。完整标准、复用现有预览指导、拆分流程和实际示例：**`references/ac-verification.md`**。
 - **范围**：优先小范围、聚焦的 Issue，而非大型多部分 Issue
 - **引用**：适当时链接到相关 Issue、PRD 部分或代码路径
-- **依赖项**：`## Dependencies` 部分必须**仅**包含在此 Issue 开始前必须先关闭/合并的 Issue。不要包括：引为上下文的父 epic、此 Issue 解锁的 Issue 或正文其他部分提到的 `#NNN` 引用。自主 dispatcher 按字面解析此部分——任何开放状态的列表项引用会导致此 Issue 被静默跳过，直到该引用关闭/合并。解析范围：**仅列表项行**（以 `-`、`*` 或 `1.` 开头的行）；`## Dependencies` 和下一个 `## ` 之间的正文和引用块被忽略。在列表项上，`#N`（同仓库）和 `owner/repo#N`（跨仓库）两种引用形式均被识别。如果没有阻塞项，精确写作 `None`。按依赖顺序创建 Issue，使编写后置 Issue 时前置 Issue 编号已知。
+- **依赖项**：`## Dependencies` 部分必须**仅**包含在此 Issue 开始前必须先关闭/合并的 Issue。不要包括：引为上下文的父 epic、此 Issue 解锁的 Issue 或正文其他部分提到的 `#NNN` 引用。自主 dispatcher 按字面解析此部分——任何开放状态的列表项引用会导致此 Issue 被静默跳过，直到该引用关闭/合并。解析范围：**仅列表项行**（以 `-`、`*` 或 `1.` 开头的行）；`## Dependencies` 和下一个 `## ` 之间的正文和引用块被忽略。在列表项上，`#N`（同仓库）和 `owner/repo#N`（跨仓库）两种引用形式均被识别。如果没有阻塞项，精确写作 `None`。按依赖顺序创建 Issue，使编写后置 Issue 时前置 Issue 编号已知。 The dispatcher parses this section literally; non-blocking references are silently skipped. Do NOT include parent epics, issues this one unblocks, or context-only references.
 - **测试需求**：始终包含"Testing Requirements"部分。Dev Agent 遵循项目的 TDD 工作流，但据观察，当 Issue 未明确要求时，它会跳过 E2E 测试或测试用例文档。明确说明：
   - 每种测试类型必须覆盖的关键场景（2-4 个要点）
   - 对于 Bug：回归测试必须在修复前失败、修复后通过
 
-## 多 Issue 创建
+## Multi-Issue Creation
 
 将大型功能拆分为多个 Issue 时：
 
 1. **按依赖顺序创建 Issue** — 先创建无依赖的 Issue，然后是依赖它们的 Issue。这确保编写依赖引用时 Issue 编号已知。
-2. **在每个 Issue 正文中填充 `## Dependencies` 部分**，使用 `#N`（同仓库）或 `owner/repo#N`（跨仓库）列表项链接，仅链接**直接阻塞**该 Issue 的 Issue。不要引用父 epic、上下文 Issue 或此 Issue 解锁的 Issue——dispatcher 将该部分中的每个列表项引用视为硬阻塞。正文或引用块中的引用被忽略。
+2. **在每个 Issue 正文中填充 `## Dependencies` 部分**，使用 `#N`（同仓库）或 `owner/repo#N`（跨仓库）列表项链接，仅链接**直接阻塞**该 Issue 的 Issue。不要引用父 epic、上下文 Issue 或此 Issue 解锁的 Issue——dispatcher 将该部分中的每个列表项引用视为硬阻塞。正文或引用块中的引用被忽略。 Every `#NNN` list item is treated as a hard blocker, so include only directly blocking prerequisites.
 3. **使用一致的命名方案** — 标题前缀项目/功能名以便过滤（如 "MyProject: Add DynamoDB infrastructure"）。
 4. **交叉引用计划** — 如存在实现计划，将每个 Issue 链接到相关的计划任务/块。
 5. **Dispatcher 跳过被阻塞的 Issue** — `## Dependencies` 部分中有开放依赖项的 Issue 会被自主 dispatcher 忽略，直到所有依赖项解决（已关闭/合并）。

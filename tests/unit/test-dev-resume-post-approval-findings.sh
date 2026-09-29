@@ -346,11 +346,9 @@ echo "=== TC-PAF-MIG: #296 B6 migration guards (false-green hazard closed) ==="
 
 # Extract the findings selector from the migrated :613 site (the `findings_at`
 # assignment now reads `itp_list_comments "$issue_num" 2>/dev/null | jq -r '<EXPR>'`).
-PAF_SELECTOR=$(awk '
-  /if ! findings_at=\$\(itp_list_comments/ {
-    match($0, /jq -r '\''([^'\'']+)'\''/, a)
-    if (a[1] != "") { print a[1]; exit }
-  }' "$WRAPPER")
+PAF_SELECTOR="$(grep -m1 'if ! findings_at=\$(itp_list_comments' "$WRAPPER" || true)"
+PAF_SELECTOR="${PAF_SELECTOR#*jq -r \'}"
+PAF_SELECTOR="${PAF_SELECTOR%%\'*}"
 if [[ -n "$PAF_SELECTOR" ]]; then
   echo -e "  ${GREEN}PASS${NC}: TC-PAF-MIG01 findings selector extracted (non-empty) from the migrated itp_list_comments read"
   PASS=$((PASS + 1))
