@@ -1,1 +1,1 @@
-../../autonomous-review/scripts/upload-screenshot.sh
+../../MergeMill-review/scripts/upload-screenshot.sh

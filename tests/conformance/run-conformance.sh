@@ -99,6 +99,21 @@ command -v jq >/dev/null 2>&1 || { log "FATAL: jq is required to run the conform
 # adapter binaries themselves can ONLY resolve to the stub.
 # ---------------------------------------------------------------------------
 _COREUTILS_DIR="$(dirname "$(command -v env)")"
+# macOS splits the POSIX toolchain across /usr/bin and /bin (for example,
+# `env` resolves from /usr/bin while `cat` resolves from /bin). Keep both
+# directories in the isolated PATH; otherwise the hermetic stub itself cannot
+# record stdin and every fixture is misreported as stdin-not-fed.
+_COREUTILS_CAT_DIR="$(dirname "$(command -v cat)")"
+if [[ ":$_COREUTILS_DIR:" != *":$_COREUTILS_CAT_DIR:"* ]]; then
+  _COREUTILS_DIR="$_COREUTILS_DIR:$_COREUTILS_CAT_DIR"
+fi
+_COREUTILS_SHA256_TOOL="$(command -v sha256sum || command -v shasum || true)"
+if [[ -n "$_COREUTILS_SHA256_TOOL" ]]; then
+  _COREUTILS_SHA256_DIR="$(dirname "$_COREUTILS_SHA256_TOOL")"
+  if [[ ":$_COREUTILS_DIR:" != *":$_COREUTILS_SHA256_DIR:"* ]]; then
+    _COREUTILS_DIR="$_COREUTILS_DIR:$_COREUTILS_SHA256_DIR"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Schema validation — python jsonschema (full Draft-07) when available, else a
@@ -335,7 +350,12 @@ _classify_fixture() {
   # `MergeMill.conf` so `load_MergeMill_conf` finds nothing via the
   # MERGEMILL_CONF_DIR branch.
   local no_conf_dir="$work/no-conf"
-  mkdir -p "$stub_dir" "$stage" "$no_conf_dir"
+  # Keep all adapter sidecars inside the fixture's disposable sandbox. This is
+  # required on macOS (and in restricted CI sandboxes) where the default
+  # $HOME/.local/state path may not be writable; it also prevents one fixture's
+  # agy conversation/log files from leaking into another fixture or a real run.
+  local pid_dir="$work/pid"
+  mkdir -p "$stub_dir" "$stage" "$no_conf_dir" "$pid_dir"
 
   # Stage files{} (logs/sidecars). Each entry: files.<name>.path (relative to the
   # fixture root) → staged under <stage>/<basename>. We track an agy log source
@@ -402,6 +422,18 @@ _classify_fixture() {
   (
     export PATH="$stub_dir:$_COREUTILS_DIR"
     export PROJECT_ID="conformance"
+    export MERGEMILL_PID_DIR="$pid_dir"
+
+    # lib-agent.sh is sourced once before this isolated subshell, so its
+    # timeout path may have been captured from the caller's PATH (including a
+    # test compatibility shim). Re-resolve it inside the hermetic PATH and,
+    # on macOS, use Homebrew's absolute timeout when the POSIX directories do
+    # not expose one. This keeps the timeout boundary while preventing a
+    # caller-side wrapper from consuming the prompt stdin stream.
+    _AGENT_TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
+    if [[ -z "$_AGENT_TIMEOUT_CMD" && -x /opt/homebrew/bin/timeout ]]; then
+      _AGENT_TIMEOUT_CMD=/opt/homebrew/bin/timeout
+    fi
 
     # --- HERMETIC ENV BASELINE (PR #244 [P1] #1) ---
     # The classification must depend ONLY on the fixture's input.env, never on the
@@ -524,7 +556,15 @@ _classify_fixture() {
     # Substitute the PASS placeholder in the CANNED stdout (the stub's source) with
     # the nonce, so a PASS fixture's stub emits the nonce a healthy model would.
     if grep -q '<NONCE>' "$canned_out" 2>/dev/null; then
-      sed -i "s/<NONCE>/$nonce/g" "$canned_out" 2>/dev/null || true
+      # Rewrite through a temporary file: BSD sed requires a backup suffix for
+      # -i while GNU sed accepts the empty form, so the GNU form silently left
+      # PASS fixtures carrying the literal <NONCE> on macOS.
+      local nonce_tmp="${canned_out}.nonce.$$"
+      if sed "s/<NONCE>/$nonce/g" "$canned_out" > "$nonce_tmp" 2>/dev/null; then
+        mv "$nonce_tmp" "$canned_out" 2>/dev/null || true
+      else
+        rm -f "$nonce_tmp" 2>/dev/null || true
+      fi
     fi
     local prompt; prompt="$(_smoke_prompt "$nonce")"
     local model; model="$(_conf_field "$manifest" input.model)"

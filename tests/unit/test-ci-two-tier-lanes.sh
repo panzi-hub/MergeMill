@@ -51,15 +51,35 @@ assert_py() {
   local desc="$1" prog="$2" out
   out=$(CI_YML="$CI_YML" CI_TIERS_PROG="$prog" python3 - <<'PYEOF' 2>&1
 import os, re, sys
+import json, subprocess
 try:
     import yaml
-except Exception as e:
-    print("FAIL:pyyaml-not-available:%s" % e); sys.exit(0)
+except Exception:
+    # macOS ships Ruby/Psych but often does not ship PyYAML. Keep this
+    # structural test dependency-free by using Ruby only for parsing and a
+    # tiny safe_dump-compatible facade for the substring checks below.
+    class _YamlCompat:
+        @staticmethod
+        def safe_dump(value):
+            return json.dumps(value, sort_keys=True)
+    yaml = _YamlCompat()
 path = os.environ["CI_YML"]
 with open(path) as f:
     raw = f.read()
 try:
-    doc = yaml.safe_load(raw)
+    if isinstance(yaml, type) or yaml.__class__.__name__ == "module":
+        doc = yaml.safe_load(raw)
+    else:
+        parsed = subprocess.run(
+            ["ruby", "-ryaml", "-rjson", "-e",
+             "puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), aliases: true))",
+             path], check=True, capture_output=True, text=True)
+        doc = json.loads(parsed.stdout)
+        # Ruby/Psych follows YAML 1.1 and parses the GitHub Actions `on` key
+        # as boolean true. JSON object keys are strings, so restore the
+        # spelling expected by the assertions after the round-trip.
+        if isinstance(doc, dict) and "true" in doc and "on" not in doc:
+            doc["on"] = doc.pop("true")
 except Exception as e:
     print("FAIL:yaml-parse-error:%s" % e); sys.exit(0)
 jobs = (doc or {}).get("jobs", {}) or {}

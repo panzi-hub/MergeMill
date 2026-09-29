@@ -51,27 +51,27 @@ PROVIDERS_DIR_PP="$SCRIPT_DIR_PP/providers"
 # both a fenced-code-block rendering and a bare (no-fence, loop-embedded)
 # rendering, so it gets two keys sharing one underlying fact).
 declare -gA FRAGMENT_AXIS=(
-  [dev.read_issue_body]=issue_provider
-  [dev.pr_create_write_to_file]=code_host
-  [dev.pr_create_wrapper_runs]=code_host
-  [dev.fastpath_interrupted]=code_host
-  [dev.pr_create_cannot_run]=code_host
-  [dev.merge_failed_likely_reason]=code_host
-  [dev.pr_create_direct_step]=code_host
-  [dev.pr_create_do_not_run_instead]=code_host
-  [dev.merge_failed_rebase_parenthetical]=code_host
-  [review.check_mergeable]=code_host
-  [review.codex_diff_step]=code_host
-  [review.check_ci_checks]=code_host
-  [review.verdict_no_bare_issue_comment]=issue_provider
-  [review.codex_gh_pr_diff_reconstruct]=code_host
-  [review.gh_pr_view_checks_parenthetical]=code_host
-  [review.codex_do_not_hand_roll]=issue_provider
-  [review.requirement_drift_gh_issue_view]=issue_provider
-  [review.watch_ci_checks]=code_host
-  [review.e2e_fetch_comment]=code_host
-  [bots.review_count_check]=code_host
-  [bots.review_count_check_bare]=code_host
+  ["dev.read_issue_body"]=issue_provider
+  ["dev.pr_create_write_to_file"]=code_host
+  ["dev.pr_create_wrapper_runs"]=code_host
+  ["dev.fastpath_interrupted"]=code_host
+  ["dev.pr_create_cannot_run"]=code_host
+  ["dev.merge_failed_likely_reason"]=code_host
+  ["dev.pr_create_direct_step"]=code_host
+  ["dev.pr_create_do_not_run_instead"]=code_host
+  ["dev.merge_failed_rebase_parenthetical"]=code_host
+  ["review.check_mergeable"]=code_host
+  ["review.codex_diff_step"]=code_host
+  ["review.check_ci_checks"]=code_host
+  ["review.verdict_no_bare_issue_comment"]=issue_provider
+  ["review.codex_gh_pr_diff_reconstruct"]=code_host
+  ["review.gh_pr_view_checks_parenthetical"]=code_host
+  ["review.codex_do_not_hand_roll"]=issue_provider
+  ["review.requirement_drift_gh_issue_view"]=issue_provider
+  ["review.watch_ci_checks"]=code_host
+  ["review.e2e_fetch_comment"]=code_host
+  ["bots.review_count_check"]=code_host
+  ["bots.review_count_check_bare"]=code_host
 )
 
 # Loaded-fragment-file guard, per provider — cheap insurance against
@@ -98,7 +98,7 @@ _pp_load_provider() {
 # provider_prompt_fragment <key> [args...]
 provider_prompt_fragment() {
   local key="$1"; shift || true
-  local axis="${FRAGMENT_AXIS[$key]:-}"
+  local axis="${FRAGMENT_AXIS["$key"]:-}"
   if [[ -z "$axis" ]]; then
     echo "provider_prompt_fragment: unknown fragment key '${key}'" >&2
     return 1
@@ -114,12 +114,12 @@ provider_prompt_fragment() {
   local provider_upper="${provider^^}"
   local -n _tpl_map="_PP_${provider_upper}_FRAGMENT"
   local -n _argc_map="_PP_${provider_upper}_ARGC"
-  local tpl="${_tpl_map[$key]:-}"
+  local tpl="${_tpl_map["$key"]:-}"
   if [[ -z "$tpl" ]]; then
     echo "provider_prompt_fragment: key '${key}' has no fragment defined for provider '${provider}' (providers/prompts-${provider}.sh)" >&2
     return 1
   fi
-  local want_argc="${_argc_map[$key]:-0}"
+  local want_argc="${_argc_map["$key"]:-0}"
   local got_argc="$#"
   if [[ "$got_argc" -ne "$want_argc" ]]; then
     echo "provider_prompt_fragment: key '${key}' (provider '${provider}') expects ${want_argc} arg(s), got ${got_argc}" >&2

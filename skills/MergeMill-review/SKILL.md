@@ -27,7 +27,10 @@ hooks:
 
 > **Provider 通道范围。** 以下正文以 GitHub 术语书写——`gh pr review`、`gh pr merge`、`gh pr checks`、`gh pr view`、`gh issue view`——因为它们是 GitHub 通道的具体形式。每个 INV-52 / INV-44 规则（Agent 发布裁决评论；wrapper 负责 approve/request-changes/merge；wrapper 强制执行可合并硬门控）都是 provider 无关的，同样适用于 GitLab 通道（`CODE_HOST=gitlab`）：wrapper 通过 `chp_approve` / `chp_merge` / `chp_mergeable` provider 接口驱动，而非 `gh pr *` 动词。当你的 prompt 在 `CODE_HOST=gitlab` 下运行时，将每一个 `gh pr …` / `gh issue …` 示例视为 wrapper 提供的接口占位符——不要手写 `glab` 调用来替换它们。
 
-彻底客观地审查由自主开发会话创建的 PR，然后**发布裁决评论**（`Review PASSED` 或 `Review findings:`）。审查 **wrapper** 负责 GitHub 原生操作：它在 PASS 后提交 `--approve` 并合并（通过其可合并 + `no-auto-close` 门控），在阻塞性 FAIL 时提交 `--request-changes`。你绝不要自己运行 `gh pr review` 或 `gh pr merge`——见 [谁负责提交 GitHub 原生 PR 操作（INV-52）](#谁负责提交-github-原生-pr-操作inv-52)。
+彻底客观地审查由自主开发会话创建的 PR，然后**发布裁决评论**（`Review PASSED` 或 `Review findings:`）。审查 **wrapper** 负责 GitHub 原生操作：它在 PASS 后提交 `--approve` 并合并（通过其可合并 + `no-auto-close` 门控），在阻塞性 FAIL 时提交 `--request-changes`。你绝不要自己运行 GitHub PR review 或 GitHub PR merge——见 [谁负责提交 GitHub 原生 PR 操作（INV-52）](#谁负责提交-github-原生-pr-操作inv-52)。
+
+The review wrapper owns and submits the GitHub-native `--approve` / `--request-changes` / merge action after the agent posts its verdict comment.
+The agent must never run `gh pr review` or `gh pr merge`.
 
 ## 何时使用
 

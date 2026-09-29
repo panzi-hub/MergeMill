@@ -147,7 +147,8 @@ chmod +x "$TMPG/bin/timeout"
 run_dispatch() {
   local cli="$1" fn="$2" rec="$3"
   env -u MERGEMILL_CONF -u MERGEMILL_CONF_DIR \
-      PATH="$TMPG/bin:$PATH" REC="$rec" \
+    PATH="$TMPG/bin:$PATH" REC="$rec" \
+      MERGEMILL_PID_DIR="$TMPG/state" \
       AGENT_CMD="$cli" AGENT_PERMISSION_MODE="auto" AGENT_TIMEOUT="4h" \
       AGENT_DEV_EXTRA_ARGS="" AGENT_REVIEW_EXTRA_ARGS="" AGENT_LAUNCHER="" \
       KIRO_AGENT_NAME="MergeMill-dev" PROJECT_ID="adtest" REPO="t/r" PROJECT_DIR="$TMPG" \
@@ -205,6 +206,7 @@ EOF
 chmod +x "$TMPG/bin/agy"
 REC="$TMPG/rec-agy-unknown"; : > "$REC"
 env -u MERGEMILL_CONF -u MERGEMILL_CONF_DIR PATH="$TMPG/bin:$PATH" REC="$REC" \
+    MERGEMILL_PID_DIR="$TMPG/state" \
     AGENT_CMD=agy AGENT_TIMEOUT="4h" AGENT_DEV_EXTRA_ARGS="" AGENT_LAUNCHER="" \
     PROJECT_ID="adtest" REPO="t/r" PROJECT_DIR="$TMPG" \
   bash -c 'unset AGENT_PID_FILE; source "'"$LIB"'" 2>/dev/null

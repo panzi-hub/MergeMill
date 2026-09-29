@@ -757,7 +757,8 @@ OUT036=$(bash -c '
 # count (not merely the string's presence) is the actual invariant: exactly
 # ONE KILL against this pgid, never two (a double-KILL regression) or zero
 # (an escalation that never fired against a TERM-resistant group).
-assert_eq "TC-LGC3-036: concurrent lane_kill invocations issue exactly ONE SIGKILL against the shared pgid (no double-KILL)" "KILL_CALLS=1" "$(grep -o 'KILL_CALLS=[0-9]*' <<<"$OUT036")"
+KILL_CALLS_VALUE="$(grep -o 'KILL_CALLS=[[:space:]]*[0-9]*' <<<"$OUT036" | tr -d '[:space:]')"
+assert_eq "TC-LGC3-036: concurrent lane_kill invocations issue exactly ONE SIGKILL against the shared pgid (no double-KILL)" "KILL_CALLS=1" "$KILL_CALLS_VALUE"
 
 # ===========================================================================
 echo ""

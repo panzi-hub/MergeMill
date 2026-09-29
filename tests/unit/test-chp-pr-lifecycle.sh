@@ -56,7 +56,7 @@ assert_contains() {
   fi
 }
 
-export REPO=panzi-hub/MergeMill
+export REPO=zxkane/MergeMill-dev-team
 export REPO_OWNER=zxkane
 
 # ===========================================================================

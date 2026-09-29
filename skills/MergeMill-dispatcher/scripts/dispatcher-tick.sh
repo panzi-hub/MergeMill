@@ -23,7 +23,12 @@ set -euo pipefail
 # gh-app-token.sh from the skill tree — no per-project lib symlink needed (#227).
 _SELF="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 
 # Self-heal exec bits on the directly-invoked sibling scripts (closes #97).
 # Some installs strip +x — git mode 100644 propagated through the skills CLI
@@ -350,7 +355,7 @@ new_issues=$(list_new_issues)
 new_count=$(jq 'length' <<<"$new_issues")
 log "  found $new_count new issue(s)"
 
-for i in $(seq 0 $((new_count - 1))); do
+for ((i = 0; i < new_count; i++)); do
   ACTIVE=$(count_active)
   if [ "$ACTIVE" -ge "$MAX_CONCURRENT" ]; then
     log "  concurrency reached during scan-new ($ACTIVE/$MAX_CONCURRENT) — stopping"
@@ -463,6 +468,7 @@ pending_review=$(list_pending_review)
 pr_count=$(jq 'length' <<<"$pending_review")
 log "  found $pr_count pending-review issue(s)"
 
+if (( pr_count > 0 )); then
 for i in $(seq 0 $((pr_count - 1))); do
   ACTIVE=$(count_active)
   if [ "$ACTIVE" -ge "$MAX_CONCURRENT" ]; then
@@ -498,6 +504,7 @@ for i in $(seq 0 $((pr_count - 1))); do
   dispatch_marker_confirm_launched "$issue_num" "review"
   JUST_DISPATCHED+=("$issue_num")
 done
+fi
 
 # ---------------------------------------------------------------------------
 # Step 4: scan-pending-dev (resume)
@@ -507,6 +514,7 @@ pending_dev=$(list_pending_dev)
 pd_count=$(jq 'length' <<<"$pending_dev")
 log "  found $pd_count pending-dev issue(s)"
 
+if (( pd_count > 0 )); then
 for i in $(seq 0 $((pd_count - 1))); do
   ACTIVE=$(count_active)
   if [ "$ACTIVE" -ge "$MAX_CONCURRENT" ]; then
@@ -695,6 +703,7 @@ for i in $(seq 0 $((pd_count - 1))); do
   dispatch_marker_confirm_launched "$issue_num" "dev-resume"
   JUST_DISPATCHED+=("$issue_num")
 done
+fi
 
 # ---------------------------------------------------------------------------
 # Step 5: stale detection
@@ -709,6 +718,7 @@ candidates=$(list_stale_candidates)
 cand_count=$(jq 'length' <<<"$candidates")
 log "  $cand_count active issue(s) to evaluate"
 
+if (( cand_count > 0 )); then
 for i in $(seq 0 $((cand_count - 1))); do
   issue_num=$(jq -r ".[$i].number" <<<"$candidates")
   # [W1a, #371] list_stale_candidates now returns the NORMALIZED itp_list_by_state
@@ -922,6 +932,7 @@ for i in $(seq 0 $((cand_count - 1))); do
     fi
   fi
 done
+fi
 
 # [INV-70] Retention built into the collector: prune the metrics log once per
 # tick (default 90d). The dispatcher runs on a cron cadence, so this is the

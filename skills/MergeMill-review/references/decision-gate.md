@@ -4,6 +4,8 @@
 
 > **此门控不可协商。在提交任何 PR 审查（APPROVE 或 REQUEST_CHANGES）之前和在 Issue 上发布裁决评论之前，必须执行此自检。如果跳过此门控，审查无效。**
 
+The wrapper owns and submits the GitHub-native `--approve` / `--request-changes` and merge actions; the agent only posts the verdict comment.
+
 完成步骤 1-11 后，所有检查清单类别中的发现将被收集。在做出 PASS/FAIL 决策之前，执行以下自检：
 
 ## 门控流程

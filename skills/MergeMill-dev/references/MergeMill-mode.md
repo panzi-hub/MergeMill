@@ -86,6 +86,9 @@ bash scripts/gh api user --jq .login
 
 **完成/未完成的决策由批准时间戳 vs 发现时间戳排序决定 — 而非仅由持续 `reviewDecision` 单独决定。** 一个 `reviewDecision == APPROVED` + 绿色 CI + 可合并的 PR **仅**在没有**晚于**最新批准的审查发现 / 变更请求评论时才是"无待处理项"。
 
+In the timestamp ordering, findings newer than the latest approval are still
+actionable; a finding created after the approval makes that approval stale.
+
 - 如果 Issue 上最新的 `Review findings:`（或 BLOCKING / `[P1]` 变更请求）评论的 `createdAt` **晚于** 最新 APPROVED 审查的 `submittedAt`，批准是**过时的**。你**必须**阅读那些发现，通过代码变更处理每个 BLOCKING / `[P1]` 项，并重新推送。**不要**发布"恢复检查 — 无待处理项"评论并退出——这样做会静默丢弃已批准 PR 上的阻塞性发现。
 - Dev wrapper 检测到这种情况，并在你的恢复 prompt 中注入一个显式的 `## Outstanding post-approval review findings` 块；当该块存在时，它覆盖任何"PR 已批准/可合并，所以我完成了"的推理。
 - 相反，作为最新审查信号的批准（无后续发现）是终局的 — 恢复到"无待处理项"而不重复工作。

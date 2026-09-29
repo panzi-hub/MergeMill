@@ -279,12 +279,26 @@ itp_github_list_comments() {
 # ([INV-25] defense-in-depth) is NOT this leaf's concern — it stays caller-side.
 itp_github_transition_state() {
   local issue_num="$1" remove="$2" add="$3"
-  local args=() _csv=() _m
-  IFS=',' read -ra _csv <<<"$remove"
-  for _m in "${_csv[@]}"; do [ -n "$_m" ] && args+=(--remove-label "$_m"); done
-  IFS=',' read -ra _csv <<<"$add"
-  for _m in "${_csv[@]}"; do [ -n "$_m" ] && args+=(--add-label "$_m"); done
-  gh issue edit "$issue_num" --repo "$REPO" "${args[@]}"
+  local args=()
+  local _csv=()
+  local _m
+  if [[ -n "$remove" ]]; then
+    IFS=',' read -r -a _csv <<<"$remove"
+  else
+    _csv=()
+  fi
+  for _m in "${_csv[@]-}"; do [ -n "$_m" ] && args+=(--remove-label "$_m"); done
+  if [[ -n "$add" ]]; then
+    IFS=',' read -r -a _csv <<<"$add"
+  else
+    _csv=()
+  fi
+  for _m in "${_csv[@]-}"; do [ -n "$_m" ] && args+=(--add-label "$_m"); done
+  if [[ ${#args[@]} -gt 0 ]]; then
+    gh issue edit "$issue_num" --repo "$REPO" "${args[@]}"
+  else
+    gh issue edit "$issue_num" --repo "$REPO"
+  fi
 }
 
 # itp_github_post_comment ISSUE BODY — post a machine-marker / progress comment.

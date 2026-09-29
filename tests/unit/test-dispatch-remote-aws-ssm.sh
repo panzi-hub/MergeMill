@@ -14,6 +14,7 @@ FAIL=0
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DRIVER="$PROJECT_ROOT/skills/MergeMill-dispatcher/scripts/dispatch-remote-aws-ssm.sh"
+HOST_BASH="$(command -v bash)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -274,15 +275,13 @@ assert_contains "inner command contains session id" "abc-session-id-123" "$recor
 echo ""
 echo "=== TC-EB-012: missing aws / jq → rc=1 ==="
 # ---------------------------------------------------------------------------
-# Run in a subshell with PATH pointing to a dir that contains real bash
-# but no aws/jq, so the driver's `command -v aws` returns false. Use
-# /usr/sbin only (where bash is reachable on Ubuntu via /bin → /usr/bin
-# but not aws). Actually the safest is: leave only the dir with bash and
-# nothing else.
+# Run with PATH pointing to a dir that contains no aws/jq, so the driver's
+# `command -v aws` returns false. Keep the invoking shell absolute: on macOS,
+# starting a copied bash binary with a scrubbed PATH can block while resolving
+# its runtime dependencies, masking the missing-dependency assertion.
 EMPTY_BIN="$TMPROOT/empty-bin"
 mkdir -p "$EMPTY_BIN"
-cp /usr/bin/bash "$EMPTY_BIN/bash" 2>/dev/null || cp /bin/bash "$EMPTY_BIN/bash"
-err=$(PATH="$EMPTY_BIN" bash "$DRIVER" dev-new 99 2>&1 >/dev/null)
+err=$(PATH="$EMPTY_BIN" "$HOST_BASH" "$DRIVER" dev-new 99 2>&1 >/dev/null)
 rc=$?
 assert_rc "missing aws on PATH → rc=1" 1 "$rc"
 case "$err" in

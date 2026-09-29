@@ -446,7 +446,7 @@ assert_contains "RT-020 INV-35-fresh-dev marker comment" "INV-35-fresh-dev:sid-0
 assert_eq "RT-020 label swap pending-dev → in-progress" "100:pending-dev:in-progress " "$_MOCK_LABEL_SWAPS"
 assert_eq "RT-020 dispatch token = dev-new" "100:dev-new " "$_MOCK_POST_TOKEN_CALLS"
 assert_eq "RT-020 dispatch dev-new fired" "dev-new:100 " "$_MOCK_DISPATCH_CALLS"
-log_size=$(stat -c '%s' "$_MOCK_LOG_FILE")
+log_size="$(wc -c <"$_MOCK_LOG_FILE" | tr -d '[:space:]')"
 assert_eq "RT-020 log truncated to 0 bytes" "0" "$log_size"
 
 # TC-INV35-RT-021: Substantive + truncate-fail → fail-closed
@@ -568,7 +568,7 @@ assert_eq "NOPROG-001 mark_stalled fired" "100 " "$_MOCK_MARK_STALLED_CALLS"
 assert_contains "NOPROG-001 idempotent notice marker" "no-progress-substantive:deadbeef" "$_MOCK_LAST_COMMENT_BODY"
 assert_eq "NOPROG-001 exactly one notice posted" "1" "$_MOCK_COMMENT_COUNT"
 # Log is NOT truncated on the escalation path (no fresh dispatch).
-log_size=$(stat -c '%s' "$_MOCK_LOG_FILE")
+log_size="$(wc -c <"$_MOCK_LOG_FILE" | tr -d '[:space:]')"
 if [[ "$log_size" != "0" ]]; then
   echo -e "  ${GREEN}PASS${NC}: NOPROG-001 log left intact (not truncated)"
   PASS=$((PASS + 1))
@@ -591,7 +591,7 @@ assert_eq "NOPROG-002 label swap pending-dev → in-progress" "100:pending-dev:i
 assert_eq "NOPROG-002 dispatch token dev-new" "100:dev-new " "$_MOCK_POST_TOKEN_CALLS"
 assert_eq "NOPROG-002 dispatch dev-new fired" "dev-new:100 " "$_MOCK_DISPATCH_CALLS"
 assert_eq "NOPROG-002 NO stall" "" "$_MOCK_MARK_STALLED_CALLS"
-log_size=$(stat -c '%s' "$_MOCK_LOG_FILE")
+log_size="$(wc -c <"$_MOCK_LOG_FILE" | tr -d '[:space:]')"
 assert_eq "NOPROG-002 log truncated to 0 bytes" "0" "$log_size"
 assert_contains "NOPROG-002 attempt marker recorded for new HEAD" "no-progress-substantive-attempt:cafe1234" "$_MOCK_FULL_COMMENT_LOG"
 
@@ -681,7 +681,7 @@ assert_returns "NOPROG-005 returns 0" 0 \
 assert_eq "NOPROG-005 dispatch dev-new fired" "dev-new:100 " "$_MOCK_DISPATCH_CALLS"
 assert_eq "NOPROG-005 NO stall (first attempt allowed)" "" "$_MOCK_MARK_STALLED_CALLS"
 assert_contains "NOPROG-005 attempt marker recorded" "no-progress-substantive-attempt:deadbeef" "$_MOCK_FULL_COMMENT_LOG"
-log_size=$(stat -c '%s' "$_MOCK_LOG_FILE")
+log_size="$(wc -c <"$_MOCK_LOG_FILE" | tr -d '[:space:]')"
 assert_eq "NOPROG-005 log truncated to 0 bytes" "0" "$log_size"
 
 # TC-DISP-NOPROG-008 (#274 review [P1] round-3 finding 2): when the attempt-marker
@@ -736,7 +736,7 @@ assert_contains "INV92-RT-001 notice keyed non-actionable-finding:<head>" "non-a
 assert_contains "INV92-RT-001 notice carries reason=non_actionable_finding" "reason=non_actionable_finding" "$_MOCK_LAST_COMMENT_BODY"
 assert_eq "INV92-RT-001 exactly one notice posted" "1" "$_MOCK_COMMENT_COUNT"
 # Log NOT truncated on the escalation path.
-log_size=$(stat -c '%s' "$_MOCK_LOG_FILE")
+log_size="$(wc -c <"$_MOCK_LOG_FILE" | tr -d '[:space:]')"
 if [[ "$log_size" != "0" ]]; then
   echo -e "  ${GREEN}PASS${NC}: INV92-RT-001 log left intact (not truncated)"
   PASS=$((PASS + 1))

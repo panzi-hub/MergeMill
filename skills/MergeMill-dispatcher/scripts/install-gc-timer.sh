@@ -29,7 +29,12 @@ set -uo pipefail
 
 _SELF="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 ADT_GC_SH="${LIB_DIR}/adt-gc.sh"
 
 GC_MARKER="# adt-gc-timer (MergeMill-dev-team Lane-GC series, do not edit — managed by install-gc-timer.sh)"

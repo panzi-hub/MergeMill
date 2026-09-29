@@ -36,7 +36,12 @@ set -uo pipefail
 # the entry script still finds the libs in the skill tree.
 _SELF="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
-LIB_DIR="$(cd "$(dirname "$(readlink -f "$_SELF")")" && pwd)"
+if command -v realpath >/dev/null 2>&1; then
+  _REAL_SELF="$(realpath "$_SELF")"
+else
+  _REAL_SELF="$(readlink -f "$_SELF")"
+fi
+LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 export MERGEMILL_CONF_DIR="${MERGEMILL_CONF_DIR:-$SCRIPT_DIR}"
 # Load MergeMill.conf (best-effort) so the no-arg invocation can resolve the
 # default project's PROJECT_ID from the project's scripts/ dir [INV-14]. The

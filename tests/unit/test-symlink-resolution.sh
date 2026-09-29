@@ -60,6 +60,11 @@ echo ""
 mkdir -p "$TMPDIR/sym-001/real/scripts"
 mkdir -p "$TMPDIR/sym-001/.claude/skills/disp/scripts"
 mkdir -p "$TMPDIR/sym-001/project/scripts"
+if command -v realpath >/dev/null 2>&1; then
+  SYM001_REAL_DIR="$(realpath "$TMPDIR/sym-001/real/scripts")"
+else
+  SYM001_REAL_DIR="$(readlink -f "$TMPDIR/sym-001/real/scripts")"
+fi
 
 # Real script that prints its resolved SCRIPT_DIR
 cat > "$TMPDIR/sym-001/real/scripts/test.sh" <<'SCRIPT'
@@ -77,7 +82,7 @@ ln -sf "$TMPDIR/sym-001/.claude/skills/disp/scripts/test.sh" "$TMPDIR/sym-001/pr
 
 # Run through the double symlink
 RESULT=$(bash "$TMPDIR/sym-001/project/scripts/test.sh")
-assert_eq "Chained symlink resolves to real directory" "$TMPDIR/sym-001/real/scripts" "$RESULT"
+assert_eq "Chained symlink resolves to real directory" "$SYM001_REAL_DIR" "$RESULT"
 
 # ===========================================================================
 # TC-SYM-002: SCRIPT_DIR works when invoked directly (no symlink)
@@ -87,7 +92,7 @@ echo "=== TC-SYM-002: SCRIPT_DIR works with direct invocation ==="
 echo ""
 
 RESULT=$(bash "$TMPDIR/sym-001/real/scripts/test.sh")
-assert_eq "Direct invocation resolves correctly" "$TMPDIR/sym-001/real/scripts" "$RESULT"
+assert_eq "Direct invocation resolves correctly" "$SYM001_REAL_DIR" "$RESULT"
 
 # ===========================================================================
 # TC-SYM-003: _LIB_AGENT_DIR resolves through symlinks when sourced
@@ -98,6 +103,11 @@ echo ""
 
 mkdir -p "$TMPDIR/sym-003/real/scripts"
 mkdir -p "$TMPDIR/sym-003/project/scripts"
+if command -v realpath >/dev/null 2>&1; then
+  SYM003_REAL_DIR="$(realpath "$TMPDIR/sym-003/real/scripts")"
+else
+  SYM003_REAL_DIR="$(readlink -f "$TMPDIR/sym-003/real/scripts")"
+fi
 
 # Real lib that sets _LIB_AGENT_DIR
 cat > "$TMPDIR/sym-003/real/scripts/lib.sh" <<'LIB'
@@ -118,7 +128,7 @@ chmod +x "$TMPDIR/sym-003/real/scripts/main.sh"
 ln -sf "$TMPDIR/sym-003/real/scripts/main.sh" "$TMPDIR/sym-003/project/scripts/main.sh"
 
 RESULT=$(bash "$TMPDIR/sym-003/project/scripts/main.sh")
-assert_eq "Sourced lib resolves _LIB_AGENT_DIR through symlink" "$TMPDIR/sym-003/real/scripts" "$RESULT"
+assert_eq "Sourced lib resolves _LIB_AGENT_DIR through symlink" "$SYM003_REAL_DIR" "$RESULT"
 
 # ===========================================================================
 # TC-SYM-004: dispatch-local.sh config fallback finds MergeMill.conf
@@ -437,6 +447,8 @@ REPO_NAME="test"
 PROJECT_DIR="$proj"
 AGENT_CMD="claude"
 GH_AUTH_MODE="token"
+MERGEMILL_PID_DIR="$proj/.pid"
+ADT_STATE_ROOT="$proj/.state"
 CONF
   # Stub MergeMill-dev.sh: source conf via the same INV-14 pattern the
   # real wrapper uses (lib-agent.sh's load_MergeMill_conf), then print

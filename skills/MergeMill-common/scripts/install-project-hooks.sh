@@ -69,7 +69,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=lib-installer.sh
 source "$SCRIPT_DIR/lib-installer.sh"
 
-ROOT="$(project_root)"
+ROOT="$(cd "$(project_root)" && pwd -P)"
 
 # is_entry_script <basename> — true when the script is a STABLE ENTRY point /
 # agent-callable utility that the project must symlink. The manifest is the
@@ -108,10 +108,12 @@ symlink_into_dispatcher_dir() {
   [[ -L "$dst" ]] || return 1
   target="$(readlink "$dst")"
   case "$target" in
-    /*) abs_target="$target" ;;
-    *)  abs_target="$(dirname "$dst")/$target" ;;
+    /*) abs_target="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)/$(basename "$target")" ;;
+    *)  abs_target="$(cd "$(dirname "$dst")" 2>/dev/null && pwd -P)/$target" ;;
   esac
-  [[ "$abs_target" == "$DISPATCHER_DIR/"* ]]
+  local dispatcher_real
+  dispatcher_real="$(cd "$DISPATCHER_DIR" 2>/dev/null && pwd -P)"
+  [[ "$abs_target" == "$dispatcher_real/"* ]]
 }
 
 # Resolve the on-disk MergeMill-dispatcher scripts dir and

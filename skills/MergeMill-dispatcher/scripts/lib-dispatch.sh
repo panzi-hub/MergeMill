@@ -995,7 +995,12 @@ is_session_completed() {
       if [ "${EXECUTION_BACKEND:-local}" = "remote-aws-ssm" ]; then
         [ -n "$_end_epoch" ] && _mtime_iso=$(_epoch_to_iso "$_end_epoch")
       else
-        _mtime_iso=$(date -u -r "$log_file" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+        # BSD date accepts `-r <epoch>` while GNU date uses `-d @<epoch>`;
+        # obtain the mtime numerically first, then use the shared converter so
+        # the local path has the same behavior on both platforms.
+        local _mtime_epoch=""
+        _mtime_epoch=$(stat -c %Y "$log_file" 2>/dev/null || stat -f %m "$log_file" 2>/dev/null || echo "")
+        [ -n "$_mtime_epoch" ] && _mtime_iso=$(_epoch_to_iso "$_mtime_epoch")
       fi
       printf -v "$end_ts_var" '%s' "$_mtime_iso"
     fi

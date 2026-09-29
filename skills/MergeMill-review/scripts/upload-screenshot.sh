@@ -70,7 +70,12 @@ BRANCH="screenshots"
 # skill-tree readlink -f dir, so the leaf is reachable regardless of project-side
 # symlink topology (Step-1 `npx skills update -g` suffices, no installer re-run).
 if ! declare -F chp_commit_file >/dev/null 2>&1; then
-  _us_real_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")" && pwd 2>/dev/null)" || _us_real_dir=""
+  if command -v realpath >/dev/null 2>&1; then
+    _us_real_self="$(realpath "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" || _us_real_self=""
+  else
+    _us_real_self="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" || _us_real_self=""
+  fi
+  _us_real_dir="$(cd "$(dirname "$_us_real_self")" && pwd 2>/dev/null)" || _us_real_dir=""
   _us_lib="${_us_real_dir}/../../MergeMill-dispatcher/scripts/lib-code-host.sh"
   if [[ -n "$_us_real_dir" && -r "$_us_lib" ]]; then
     # shellcheck source=../../MergeMill-dispatcher/scripts/lib-code-host.sh
