@@ -89,6 +89,20 @@ parse_file_path() {
 # (`git -c key=val push`, `git --git-dir=/x push`) and command chains
 # (`cd /tmp && git push`).
 #
+# [INV-122] Also matches behind the wrapper forms agents habitually emit —
+# no adversarial intent is needed to hit any of these:
+#   - PATH-qualified interpreters: `/usr/bin/git push` (basename match on
+#     the interpreter token);
+#   - command substitution / subshells: `$(git push …)`, backticks (their
+#     delimiters are segment separators, same as `&&`/`;`/`|`);
+#   - `-c` payload strings of bash/sh/env wrappers:
+#     `bash -c "git push origin main"` — such payloads are scanned as
+#     candidate command strings, recursively (nested wrappers, depth ≤ 3).
+# Quoted mentions behind OTHER commands' arguments (`gh issue create
+# --body "see git push docs"`, `echo "git push"`) still never match, and
+# only bash/sh/env wrappers are unwrapped — a quoted arg after some other
+# command's `-c`-like flag stays inert.
+#
 # Limitation: the quote-stripping pass does not fully understand escaped
 # quotes (`"see \"git push\" docs"`) — the ERE treats `\"` as a region
 # boundary, so a missed strip is possible. This is acceptable because the
@@ -97,8 +111,45 @@ parse_file_path() {
 # `--no-verify`). The strip MUST still terminate on every input — see the
 # quoted-substitution note inside the function (#266).
 is_git_command() {
+  _is_git_command_scan "$1" "$2" 0
+}
+
+# Internal scanner behind is_git_command. depth bounds the recursive `-c`
+# payload scan (`bash -c 'bash -c "git push …"'`). Not for external use.
+_is_git_command_scan() {
   local operation="$1"
   local command="$2"
+  local depth="${3:-0}"
+
+  # Pass 1 [INV-122]: unwrap `-c` payloads of bash/sh/env wrappers. Runs on
+  # the RAW text (quotes intact), so a payload may itself contain `&&`/`;`
+  # and nested wrappers resolve recursively. The match-and-literal-replace
+  # loops follow the #266 quoting discipline and therefore always terminate.
+  if (( depth < 3 )); then
+    local sq="'" scan payload
+    # The middle group is optional-but-space-terminated: `bash -c "…"` (flag
+    # immediately after the wrapper), `bash --norc -c "…"` and
+    # `env FOO=1 bash -c "…"` must all resolve to the SAME payload.
+    local re_dq='(^|[^A-Za-z0-9_])(bash|sh|env)[[:space:]]+([^;|&]*[[:space:]])?-c[[:space:]]+("[^"]*")'
+    local re_sq="(^|[^A-Za-z0-9_])(bash|sh|env)[[:space:]]+([^;|&]*[[:space:]])?-c[[:space:]]+(${sq}[^${sq}]*${sq})"
+    scan="$command"
+    # NOTE: capture BASH_REMATCH before the recursive call — the callee's own
+    # `[[ =~ ]]` overwrites it in this same shell (a stale/unbound reference
+    # here would break under `set -u`, see #266's discipline). The payload is
+    # group 4 (1 = leading boundary, 2 = wrapper word, 3 = optional middle
+    # flags/env-assignments, 4 = quoted payload).
+    while [[ "$scan" =~ $re_dq ]]; do
+      local _whole="${BASH_REMATCH[0]}" _inner="${BASH_REMATCH[4]:1:${#BASH_REMATCH[4]}-2}"
+      _is_git_command_scan "$operation" "$_inner" $(( depth + 1 )) && return 0
+      scan="${scan/"$_whole"/ }"
+    done
+    scan="$command"
+    while [[ "$scan" =~ $re_sq ]]; do
+      local _whole_sq="${BASH_REMATCH[0]}" _inner_sq="${BASH_REMATCH[4]:1:${#BASH_REMATCH[4]}-2}"
+      _is_git_command_scan "$operation" "$_inner_sq" $(( depth + 1 )) && return 0
+      scan="${scan/"$_whole_sq"/ }"
+    done
+  fi
 
   # Strip single- and double-quoted regions so mentions inside quoted
   # strings (e.g. `--body "see git push docs"`) cannot match.
@@ -119,16 +170,20 @@ is_git_command() {
   done
 
   # Split on shell separators so each segment can be scanned independently.
+  # [INV-122] command-substitution delimiters (`$(`, `(`, `)`, backtick) are
+  # separators too — a git invocation inside `$(…)` is still an invocation.
   local normalised
-  normalised=$(printf '%s' "$stripped" | sed -E 's/(\|\||&&|;|\||&)/\n/g')
+  normalised=$(printf '%s' "$stripped" | sed -E 's/(\$\(|\(|\)|`|\|\||&&|;|\||&)/\n/g')
 
   local segment
   while IFS= read -r segment; do
     local -a tokens
     read -ra tokens <<<"$segment"
     local i=0 n=${#tokens[@]}
-    # Find the `git` token (as a whole token — not a substring).
-    while (( i < n )) && [[ "${tokens[i]}" != "git" ]]; do
+    # Find the `git` token (whole token — basename match, so PATH-qualified
+    # interpreters like /usr/bin/git count as `git` [INV-122] — not a
+    # substring of other tokens).
+    while (( i < n )) && [[ "${tokens[i]##*/}" != "git" ]]; do
       ((i++))
     done
     (( i >= n )) && continue
