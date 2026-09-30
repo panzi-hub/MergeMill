@@ -194,13 +194,16 @@ print("OK" if "GITHUB_STEP_SUMMARY" in blob else "FAIL:no-step-summary-write")
 
 # PR #256 [P1]: actions/checkout defaults to clean:true (git clean -ffdx), which
 # would delete a gitignored tests/e2e/e2e.conf inside the persistent self-hosted
-# checkout. The matrix config MUST therefore be read from OUTSIDE the checkout.
+# checkout. The matrix config MUST therefore be read from OUTSIDE the checkout —
+# the canonical per-box path provisioned by tests/e2e/setup-live-runner.sh
+# ([INV-77] rule 4).
 echo "=== TC-CI-TIERS-021: live-smoke matrix config lives outside the checkout ==="
 assert_py "TC-CI-TIERS-021 live-smoke resolves SMOKE_CONF outside the checkout" '
 blob = yaml.safe_dump(jobs.get("live-smoke") or {})
-# The job must NOT default the matrix to a checkout-internal path and must wire
-# an out-of-tree source: the RUNNER_SMOKE_CONF override and a $HOME-based default.
-ok = "RUNNER_SMOKE_CONF" in blob and "HOME/.config" in blob
+# The job must resolve the matrix to the canonical $HOME-based path and must NOT
+# wire any repo-variable provisioning channel (removed by maintainer decision —
+# [INV-77] rule 4: one standard onboarding form, tests/e2e/setup-live-runner.sh).
+ok = "HOME/.config" in blob and "RUNNER_SMOKE_CONF" not in blob and "SMOKE_MATRIX" not in blob
 print("OK" if ok else "FAIL:smoke-conf-not-resolved-outside-checkout")
 '
 
@@ -226,30 +229,33 @@ ok = ("! -r" in region and "SMOKE_CONF" in region and "::error::" in region)
 print("OK" if ok else "FAIL:no-preflight-readability-guard-in-live-smoke")
 '
 
-# PR #256 [P1] (cycle 11): the self-hosted pool is an ephemeral autoscaling spot
-# fleet — a per-box file at $HOME/.config/... does NOT persist across pool churn,
-# so a labeled run lands on a fresh runner with no matrix and the preflight fails.
-# The lane must be self-provisioning: a `SMOKE_MATRIX` repo variable carrying the
-# matrix CONTENT, materialized to a file at job time, so any pool runner has it.
-echo "=== TC-CI-TIERS-024: live-smoke is self-provisioning via the SMOKE_MATRIX repo variable ==="
-assert_py "TC-CI-TIERS-024 live-smoke materializes SMOKE_MATRIX content when no path source exists" '
-blob = yaml.safe_dump(jobs.get("live-smoke") or {})
-# The job must (a) wire the SMOKE_MATRIX repo variable into env, and (b) write its
-# content to a file when neither RUNNER_SMOKE_CONF nor the per-box default resolves
-# — so the lane works on an autoscaling pool runner with no pre-provisioned file.
-ok = "SMOKE_MATRIX" in blob and "vars.SMOKE_MATRIX" in blob
-print("OK" if ok else "FAIL:no-smoke-matrix-self-provisioning-branch")
-'
-
-echo "=== TC-CI-TIERS-025: SMOKE_MATRIX materialization lands OUTSIDE the checkout ==="
-assert_py "TC-CI-TIERS-025 materialized matrix uses a temp path, not a checkout-internal file" '
+# The RUNNER_SMOKE_CONF / SMOKE_MATRIX repo-variable channels were removed by
+# maintainer decision ([INV-77] rule 4): provisioning is ONE command —
+# tests/e2e/setup-live-runner.sh — so the preflight remediation must point at
+# that standard form, and no repo-variable wiring may reappear in the job.
+echo "=== TC-CI-TIERS-024: live-smoke provisioning points at the standard onboarding form ==="
+assert_py "TC-CI-TIERS-024 preflight remediation names setup-live-runner.sh; repo-variable wiring is gone" '
 m = re.search(r"\n  live-smoke:\n(?:.*\n)*?(?=\n  [A-Za-z0-9_-]+:\n|\Z)", raw)
 region = m.group(0) if m else ""
-# When materializing SMOKE_MATRIX, the file must be created via mktemp (a runner
-# temp dir outside the checkout), never written into tests/e2e/ where git clean
-# would wipe it — and the resolved path still exported as SMOKE_CONF.
-ok = ("SMOKE_MATRIX" in region and "mktemp" in region and "SMOKE_CONF=" in region)
-print("OK" if ok else "FAIL:smoke-matrix-not-materialized-to-temp")
+# Scoped to the RAW region (comments included) so even a stale comment cannot
+# reintroduce a removed channel name. vars.RUNNER_LABEL legitimately stays —
+# it targets the shared pool and is not a provisioning channel.
+ok = ("setup-live-runner.sh" in region
+      and "RUNNER_SMOKE_CONF" not in region
+      and "SMOKE_MATRIX" not in region)
+print("OK" if ok else "FAIL:smoke-matrix-channel-not-removed")
+'
+
+echo "=== TC-CI-TIERS-025: SMOKE_CONF is the canonical $HOME path, exported via GITHUB_ENV ==="
+assert_py "TC-CI-TIERS-025 canonical path assignment exported via GITHUB_ENV" '
+m = re.search(r"\n  live-smoke:\n(?:.*\n)*?(?=\n  [A-Za-z0-9_-]+:\n|\Z)", raw)
+region = m.group(0) if m else ""
+# The assignment must be the exact canonical string (TC-SLR-005 pins the same
+# string in setup-live-runner.sh and e2e.conf.example) and must be exported to
+# $GITHUB_ENV so the run step and run-agent-smoke.sh read the same file.
+ok = ("SMOKE_CONF=\"$HOME/.config/MergeMill-dev-team/e2e.conf\"" in region
+      and "GITHUB_ENV" in region)
+print("OK" if ok else "FAIL:smoke-conf-not-canonical-home-path")
 '
 
 # PR #256 [P1] (cycle 12, finding 2 — Keesan12 requirement): an UNLABELED PR must

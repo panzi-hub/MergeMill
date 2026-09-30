@@ -3634,44 +3634,46 @@ split is a hard contract:
    `pull_request_target` — `pull_request_target` would run with the base repo's
    token/secrets against untrusted head code (the classic injection foot-gun).
 
-4. **The live matrix config lives OUTSIDE the checkout, and the lane is
-   self-provisioning.** The matrix (`name|agent_cmd|model|env-setup` entries,
-   credentials sourced in `env-setup`) must NOT sit inside the repo tree, because
-   `actions/checkout` defaults to `clean: true` (`git clean -ffdx`) and would
-   delete a gitignored `tests/e2e/e2e.conf` before the run step — the job would
-   then die on `FATAL: matrix not found/readable` instead of proving the matrix
-   (PR #256 review [P1]). The `live-smoke` job resolves the matrix from the first
-   of three sources that hits, exports the result as `SMOKE_CONF` to `$GITHUB_ENV`
-   (the harness honors the `SMOKE_CONF` override), and **preflights its
-   readability**:
-   1. **`RUNNER_SMOKE_CONF`** repo variable — a PATH to a runner-local matrix file.
-   2. **`SMOKE_MATRIX`** repo variable — the matrix **CONTENT**, materialized at
-      job time to a runner TEMP file (`mktemp` under `$RUNNER_TEMP`, outside the
-      checkout). This is the **self-provisioning** channel and the one that works
-      on the shared pool: the self-hosted fleet is an **ephemeral autoscaling
-      spot pool**, so a per-box file does NOT survive pool churn — a labeled run
-      lands on a fresh runner with no file. A repo variable travels with the repo,
-      so any pool runner materializes the same matrix (cycle-11 [P1] fix). It is
-      consumed as a quoted shell env var (never `${{ }}`-inlined into the run
-      block), so its content cannot be parsed as workflow/shell syntax;
-      maintainer-only (a repo variable needs write access) and MUST NOT carry
-      secrets (Bedrock entries use the runner instance role; key entries source a
-      runner-local secrets file inside `env-setup`).
-   3. **`$HOME/.config/MergeMill-dev-team/e2e.conf`** — a stable per-box default
-      for a pinned, long-lived runner.
-   If none resolve, the preflight emits a `::error::` + a provisioning pointer
-   (naming all three sources) rather than the opaque harness FATAL.
+4. **The live matrix config lives OUTSIDE the checkout at the ONE canonical
+   per-box path, provisioned by ONE standard command.** The matrix
+   (`name|agent_cmd|model|env-setup` entries, credentials sourced in `env-setup`)
+   must NOT sit inside the repo tree, because `actions/checkout` defaults to
+   `clean: true` (`git clean -ffdx`) and would delete a gitignored
+   `tests/e2e/e2e.conf` before the run step — the job would then die on
+   `FATAL: matrix not found/readable` instead of proving the matrix (PR #256
+   review [P1]). The path is **`$HOME/.config/MergeMill-dev-team/e2e.conf`** —
+   the SAME string in the workflow preflight, `tests/e2e/setup-live-runner.sh`,
+   and the annotated template (pinned by TC-SLR-005). Provisioning is
+   **`bash tests/e2e/setup-live-runner.sh`** (see rule 5 for the trusted seed):
+   it probes whatever agent CLIs the box has — ANY subset of the adapter set is
+   a valid matrix, because the harness classifies a missing/auth-walled CLI as
+   UNAVAILABLE/advisory ([INV-63]) — generates 4-field-validated entries
+   (honoring the machine's Bedrock env), writes the canonical path, refuses to
+   clobber without `--force`, and previews with `--dry-run`. The earlier
+   repo-variable provisioning channels (`RUNNER_SMOKE_CONF` path /
+   `SMOKE_MATRIX` content) are REMOVED by maintainer decision — one standard
+   command, not N env channels; an ephemeral autoscaling pool runner onboards
+   the same way, by running the same command at boot/image build. The
+   `live-smoke` preflight exports the resolved path as `SMOKE_CONF` to
+   `$GITHUB_ENV` (the harness honors the `SMOKE_CONF` override) and **preflights
+   its readability**: if the canonical file is missing it emits a `::error::` +
+   a step summary pointing at `setup-live-runner.sh` rather than the opaque
+   harness FATAL.
 
 5. **The matrix is seeded only from a TRUSTED template — never from the PR
    checkout.** The matrix `env-setup` is `eval`'d by the harness on the
    self-hosted runner, so its content is code. On a **labeled fork PR**,
    `actions/checkout` checks out the fork HEAD, so the in-checkout
-   `tests/e2e/e2e.conf.example` is **attacker-controlled** — seeding `SMOKE_MATRIX`
-   / the per-box file from that copy would persist arbitrary shell on the runner
-   and into future runs (PR #256 review [P1], cycle 12). All provisioning guidance
-   (the preflight job-summary pointer, `CONTRIBUTING.md`, `tests/e2e/e2e.conf.example`)
-   therefore sources the template from `main` (`gh api …/contents/…?ref=main`) or a
-   local trusted clone — never `cp tests/e2e/e2e.conf.example` from the checkout —
+   `tests/e2e/e2e.conf.example` is **attacker-controlled** — seeding the matrix
+   from that copy would persist arbitrary shell on the runner and into future
+   runs (PR #256 review [P1], cycle 12). The standard onboarding form enforces
+   this structurally: `tests/e2e/setup-live-runner.sh` fetches the template
+   itself — `git show <ref>:tests/e2e/e2e.conf.example` (default `origin/main`),
+   `gh api …/contents/…?ref=main` as fallback — and NEVER reads the working
+   tree (pinned by TC-SLR-002's poisoned-working-tree probe). The remaining
+   manual guidance (the preflight job-summary pointer, `CONTRIBUTING.md`,
+   `tests/e2e/e2e.conf.example`) sources the template from `main` or a local
+   trusted clone — never `cp tests/e2e/e2e.conf.example` from the checkout —
    and tells the maintainer to review before use.
 
 6. **An always-on, non-failing status summary covers the unlabeled PR.** The
@@ -3698,10 +3700,10 @@ gates #222 + anchors on [INV-74](#inv-74-adapter-conformance-is-regression-pinne
 `setup-labels.sh` (defines the `run-live-smoke` gate label so it exists on day one).
 
 **Consumer**: GitHub Actions (schedules jobs per the `on:` triggers + `if:`
-gate); maintainers (apply `run-live-smoke` to authorize a live run; set the
-`SMOKE_MATRIX` repo variable to self-provision the matrix on the autoscaling
-pool); branch protection (marks the two `hermetic-*` jobs required, `live-smoke`
-not).
+gate); maintainers (apply `run-live-smoke` to authorize a live run; onboard a
+runner box — pinned or ephemeral pool member — with
+`bash tests/e2e/setup-live-runner.sh`, the standard provisioning form); branch
+protection (marks the two `hermetic-*` jobs required, `live-smoke` not).
 
 **Tested by**:
 - `tests/unit/test-ci-two-tier-lanes.sh` (TC-CI-TIERS-010..051) — structural
@@ -3709,14 +3711,21 @@ not).
   `ubuntu-latest` + credential-free; `live-smoke.if` matches the label-OR-push
   gate; no `pull_request_target`; `pull_request` declares `labeled`; `live-smoke`
   invokes `run-agent-smoke.sh`, targets self-hosted, writes a job summary;
-  resolves the matrix config OUTSIDE the checkout (TC-CI-TIERS-021: `RUNNER_SMOKE_CONF`
-  + `$HOME`-based default), is self-provisioning via the `SMOKE_MATRIX` repo
-  variable materialized to a temp file (TC-CI-TIERS-024/025), exports it via
-  `$GITHUB_ENV` (022), and preflights its readability with a loud `::error::`
-  (023); the always-on `live-smoke-status` job reports skip/scheduled on every PR
-  and is hermetic (TC-CI-TIERS-026/027); the provisioning pointer seeds only from a
-  trusted `main` template, never the PR checkout (TC-CI-TIERS-028); and
-  `setup-labels.sh` defines `run-live-smoke`.
+  resolves the matrix to the canonical `$HOME`-based path OUTSIDE the checkout
+  with no repo-variable channel (TC-CI-TIERS-021), points its remediation at
+  `setup-live-runner.sh` with the removed channels absent (024), assigns and
+  exports the canonical path via `$GITHUB_ENV` (022/025), and preflights its
+  readability with a loud `::error::` (023); the always-on `live-smoke-status`
+  job reports skip/scheduled on every PR and is hermetic (TC-CI-TIERS-026/027);
+  the provisioning pointer seeds only from a trusted `main` template, never the
+  PR checkout (TC-CI-TIERS-028); and `setup-labels.sh` defines `run-live-smoke`.
+- `tests/unit/test-setup-live-runner.sh` (TC-SLR-001..012) — the standard
+  onboarding form itself: any-subset CLI probe, 4-field entry generation
+  (kiro `KIRO_AGENT_NAME` default, machine Bedrock env), `--force`/`--dry-run`
+  behavior, loud template-fetch failure, the fork-safety proof (a poisoned
+  working-tree template never leaks into the generated matrix or the saved
+  template), and the canonical-path three-way pin (script == `ci.yml` ==
+  template, TC-SLR-005).
 - `hermetic-shellcheck`'s `actionlint` step — deeper workflow syntax +
   `pull_request_target` foot-gun lint (belt-and-suspenders to the gate-logic test).
 - `docs/test-cases/ci-two-tier-lanes.md` — TC-CI-TIERS-NNN enumeration + the

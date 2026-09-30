@@ -31,6 +31,13 @@ Restructure CI into two explicit tiers:
   ephemeral autoscaling pool, with `RUNNER_SMOKE_CONF` (path) and a per-box default
   as fallbacks — see [INV-77](../pipeline/invariants.md#inv-77-ci-is-two-tiers--hermetic-always-on--credential-free-live-agent-smoke-is-self-hosted-label-gated-and-advisory) sub-point 4.
 
+> **Update (runner onboarding standardization)**: the `SMOKE_MATRIX` /
+> `RUNNER_SMOKE_CONF` repo-variable channels described above were later removed by
+> maintainer decision — provisioning is now the ONE standard form,
+> `bash tests/e2e/setup-live-runner.sh`, writing the canonical per-box path
+> `$HOME/.config/MergeMill-dev-team/e2e.conf` ([INV-77](../pipeline/invariants.md#inv-77-ci-is-two-tiers--hermetic-always-on--credential-free-live-agent-smoke-is-self-hosted-label-gated-and-advisory)
+> sub-point 4; an ephemeral pool runner onboards the same way at boot/image build).
+
 ## Gate truth table (the spec the structure test asserts)
 
 | Trigger | hermetic | live-smoke |

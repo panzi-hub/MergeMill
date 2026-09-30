@@ -204,34 +204,36 @@ fork PR 自身无法触发 live 层（无标签 = 不调度），因为自托管
 **作为外部贡献者，你永远不需要为 live 层做任何事**——如果需要进行 live 运行，
 维护者会给你的 PR 打上标签。
 
-> **维护者一次性设置：** live 矩阵配置必须存放在仓库 checkout **之外**
->（因为 `actions/checkout` 运行 `git clean -ffdx` 会删除 checkout 内的
-> `tests/e2e/e2e.conf`）。
+> **维护者一次性设置（每台 runner 机器执行一次）：** live 矩阵配置必须存放在
+> 仓库 checkout **之外**（因为 `actions/checkout` 运行 `git clean -ffdx` 会删除
+> checkout 内的 `tests/e2e/e2e.conf`）。标准接入形式是一条命令：
+>
+> ```bash
+> bash tests/e2e/setup-live-runner.sh          # 探测本机 CLI → 生成 → 写入规范路径
+> # 按保存的模板逐机增强（Bedrock region、自定义端点、require: 守卫），审查后：
+> bash tests/e2e/setup-live-runner.sh --force  # 替换已有矩阵
+> ```
+>
+> 它把矩阵写到规范路径 `$HOME/.config/MergeMill-dev-team/e2e.conf`（CI
+> preflight 读取的唯一路径），并把模板存到旁边作 `e2e.conf.example` 供按机
+> 增强。本机装了哪些 agent CLI 就生成哪些条目——**任意子集均合法**（缺失的
+> CLI 会被归类为 `UNAVAILABLE`，仅提示、不阻塞）；`--dry-run` 可预览；无
+> `--force` 拒绝覆盖。自动扩缩容池的新 runner 用同一条命令在启动/镜像构建时
+> 接入即可。
 >
 > > ⚠️ **仅从可信模板初始化——绝对不要从此 PR 的 checkout 初始化。** 对于已打
 > > 标签的 fork PR，checkout 中的 `tests/e2e/e2e.conf.example` 是攻击者控制的
 > > 内容，而 `run-agent-smoke.sh` 在自托管 runner 上 `eval` 每个条目的
 > > `env-setup`——因此复制 checkout 副本会在 runner 上持久化任意 shell 代码。
-> > 始终从 `main`（`?ref=main`）或本地可信克隆获取模板，**审查它**，然后初始化。
+> > `setup-live-runner.sh` 自身从可信引用取模板（`git show origin/main`，gh api
+> > `?ref=main` 兜底），绝不读工作树；手动初始化时也只从 `main` 或本地可信克隆
+> > 获取，**审查后再用**。
 >
-> 通过以下方式之一提供（按优先级）：
->
-> 1. **`SMOKE_MATRIX` 仓库变量（推荐）**——将其设置为矩阵*内容*；`live-smoke`
->    任务在运行时将其物化到临时文件，因此在**自动扩缩容的自托管池**中可用
->    （每台机器的文件在池变化时会丢失）。仅维护者可操作；不得包含密钥
->    （Bedrock 条目使用 runner 实例角色）。从 `main` 上的模板初始化，审查，设置：
->    ```bash
->    gh api repos/<owner>/<repo>/contents/tests/e2e/e2e.conf.example?ref=main \
->      --jq '.content' | base64 -d > /tmp/smoke-matrix.tmpl   # 审查 + 编辑，然后：
->    gh variable set SMOKE_MATRIX --repo <owner>/<repo> --body-file /tmp/smoke-matrix.tmpl
->    ```
-> 2. **`RUNNER_SMOKE_CONF` 仓库变量**——指向 runner 本地矩阵文件的路径 PATH。
-> 3. **每台机器文件**，用于固定且长期存在的 runner，从 `main` 初始化（而非
->    checkout）：`gh api repos/<owner>/<repo>/contents/tests/e2e/e2e.conf.example?ref=main --jq '.content' | base64 -d > "$HOME/.config/MergeMill/e2e.conf"` 然后审查 + 编辑。
->
-> `live-smoke` 任务在运行前检查这些，如果都未解析则失败并给出配置提示
->（列出全部三种来源）。一个**始终运行的 `live-smoke-status` 任务**也在每个 PR
-> 上输出非失败的摘要，使未打标签的 PR 清楚地显示 live 层正等待维护者标签而有意跳过。
+> 以前的 `SMOKE_MATRIX` / `RUNNER_SMOKE_CONF` 仓库变量通道已移除（维护者决定）：
+> 接入是一条命令，不是 N 个环境通道。`live-smoke` 任务只读上述规范路径，缺失时
+> 以 `::error::` + 指向 `setup-live-runner.sh` 的提示响亮失败。一个**始终运行的
+> `live-smoke-status` 任务**也在每个 PR 上输出非失败的摘要，使未打标签的 PR
+> 清楚地显示 live 层正等待维护者标签而有意跳过。
 
 ## PR 检查清单
 
