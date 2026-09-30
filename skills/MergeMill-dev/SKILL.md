@@ -224,10 +224,18 @@ git check-ignore -q .worktrees 2>/dev/null || echo "WARNING: .worktrees not in .
 
 ## 步骤 5：本地验证
 
-在终端中执行：
+只验证本次改动覆盖到的测试，不要为了一个小改动跑完整仓库套件。
+
+1. 找出与本次新增或修改文件直接对应的测试（同名 `tests/unit/test-<feature>.sh`，或测试文件里点名引用了这些路径）。
+2. 只同步运行这些测试。没有对应测试时，写一个最小测试再跑它。
+3. 不要运行 `tests/run-unit-tests.sh`、`npm test` 或全量 `tests/unit/test-*.sh`，除非 Issue 明确要求全量回归。全量套件交给 CI。
+4. 对本次改动的 shell 脚本跑 `shellcheck`。没有 `npm` 脚本时不要发明 `npm test`。
+
+示例：
 
 ```bash
-timeout 1800 bash -lc 'npm run build && npm run test' > /tmp/verify.log 2>&1; rc=$?; [ $rc -ne 0 ] && tail -100 /tmp/verify.log; exit $rc
+bash tests/unit/test-<feature>.sh
+shellcheck --severity=error path/to/changed.sh
 ```
 
 修复任何失败再继续。如适用，在本地部署并验证。
@@ -242,7 +250,7 @@ timeout 1800 bash -lc 'npm run build && npm run test' > /tmp/verify.log 2>&1; rc
    ```
 2. **绝不要将顶层套件后台运行**（不使用 `&`，不使用后台任务模式——无论宿主 CLI 怎么称呼，例如 `run_in_background`）然后在各 Agent 轮次中轮询其日志。每次轮询是一次完整的模型往返；累计的轮询成本可能超过套件自身运行时长的数量级。
 3. 如果工具的最大超时确实无法覆盖套件，按目录/前缀拆分为几个连续的同步调用——仍不要轮询。
-4. 如项目提供了并行运行器，优先使用该类工具。
+4. 如项目提供了并行运行器，只在 Issue 明确要求全量回归时使用。小改动禁止用它跑完整 `tests/unit/`。
 
 **范围**：禁止的是将顶层验证命令后台运行。内部创建子进程或本地服务器的测试/脚本不受影响，真正的事件驱动等待也不受影响（步骤 9 的 CI 检查、步骤 10-11 的 bot 审查）。
 

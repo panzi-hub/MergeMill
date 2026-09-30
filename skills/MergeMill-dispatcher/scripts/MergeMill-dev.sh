@@ -1320,6 +1320,7 @@ ${PR_CREATE_BROKER_BLOCK}
 
 IMPORTANT: Work autonomously. Do NOT ask the user questions - make reasonable decisions.
 If you encounter a blocking error, document it in a comment on issue #${ISSUE_NUMBER} and exit cleanly.
+Verify only tests that directly cover files you changed. Do NOT run tests/run-unit-tests.sh or the full tests/unit suite unless the issue explicitly requires a full regression. CI runs the full suite.
 EOF
 )"
 
@@ -1453,6 +1454,7 @@ elif [[ "$MODE" = "resume" ]]; then
 
   RESUME_PROMPT="$(cat <<EOF
 Resuming work on issue #${ISSUE_NUMBER}.
+Verify only tests that directly cover files you changed. Do NOT run tests/run-unit-tests.sh or the full tests/unit suite unless the issue explicitly requires a full regression. CI runs the full suite. Stop any full-suite run already in progress.
 
 ${OPEN_PR_FAST_PATH}
 ${PR_CREATE_BROKER_BLOCK}
