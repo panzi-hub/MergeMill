@@ -6696,3 +6696,26 @@ _Triage (issue #236): [machine-checked: tests/unit/test-hook-guard-hardening.sh]
 **Cross-references**:
 - #266 — the quote-strip termination discipline every new match-and-replace loop here inherits (quoted substitution; BASH_REMATCH captured before the recursive scan clobbers it).
 - #48 — the subcommand-position matcher whose semantics this invariant extends (basename matching and wrapper unwrapping) without altering.
+## INV-123: the GitHub App token-refresh daemon survives transient mint failures, bounds its outbound API calls in time, and removes the token file only when it gives up
+
+_Triage (issue #236): [machine-checked: tests/unit/test-token-refresh-daemon-resilience.sh]_
+
+**Rule**:
+
+1. **The retry ladder is reachable.** A transient `get_gh_app_token` failure inside the refresh loop MUST be survived: the failure counter increments via the assignment form (`FAIL_COUNT=$((FAIL_COUNT + 1))`), the WARNING logs, the on-disk token stays, and the daemon retries on the next interval, giving up only after `MAX_CONSECUTIVE_FAILURES` consecutive failures. The pre-fix `((FAIL_COUNT++))` — a post-increment whose value is the OLD count (0 on the first failure), making the arithmetic command return rc 1 under `set -euo pipefail` — killed the daemon on the very first transient failure; the retry ladder was unreachable dead code and even the WARNING never printed (verified: the last executed statement before death was the increment itself).
+2. **Outbound API calls are time-bounded.** Both GitHub API `curl` calls in `_app_install_token` (installation lookup + token exchange) carry `--connect-timeout 10 --max-time 30`. A stalled TCP connection (VPN drop, MTU black hole, hung proxy) otherwise blocks the daemon forever — the process stays "alive" but never refreshes again, so the token silently expires with zero signal. A timed-out call yields `http_code=000`, which the existing 2xx validation already rejects.
+3. **Give-up posture.** Exiting via the FATAL path (MAX consecutive failures) removes the token file first: by then it is guaranteed expired (`MAX × REFRESH_INTERVAL` ≫ the 60-min TTL) and could only produce silent 401s — removing it makes consumers fail loud on the missing file, the same posture as the pre-existing parent-death cleanup. An operator TERM intentionally keeps the (possibly still fresh) token file so in-flight sessions degrade gracefully until TTL; that asymmetry is deliberate and pinned by test.
+
+**Why**: this daemon is what keeps agent/wrapper sessions longer than the 60-min token TTL authenticated at all. Its two failure modes were both silent: a single transient API hiccup (rate limit, network blip) killed it outright — every subsequent `gh` call in every wrapper 401s until an operator notices — and a hung connection froze it in an alive-but-useless state. Both violate the pipeline's fail-loud design: nothing surfaced the loss of refresh capability.
+
+**Producer**: `skills/MergeMill-dispatcher/scripts/gh-token-refresh-daemon.sh` (the refresh loop's counter and FATAL cleanup); `skills/MergeMill-dispatcher/scripts/gh-app-token.sh` (`_app_install_token`'s curl bounds).
+
+**Consumer**: `gh-with-token-refresh.sh` and every wrapper/agent `gh` invocation routed through the token file — both the wrapper-token daemon and the [INV-79] scoped agent-token daemon (which reuses this same script).
+
+**Status**: **ENFORCED**.
+
+**Test**: `tests/unit/test-token-refresh-daemon-resilience.sh` — fully hermetic: a mock `gh-app-token.sh` is injected by dropping it next to a copy of the daemon (the daemon resolves LIB_DIR from its own realpath, [INV-65] — no source-line patching); the 60s interval clamp and `MAX_CONSECUTIVE_FAILURES` are sed-patched on the copy for test speed (same patch-the-copy pattern as `test-run-unit-tests.sh`'s SERIAL_TESTS cases). TC-TRD-001 proves a transient failure is survived, logged, and recovered from (and the harness pattern was verified to genuinely FAIL against the pre-fix daemon: it died at `(( FAIL_COUNT++ ))`, rc 1, before any refresh-failure WARNING); TC-TRD-002 proves the FATAL path removes the guaranteed-expired token file; TC-TRD-003 pins the TERM-keeps-token posture; TC-TRD-004 grep-pins both curl time bounds.
+
+**Cross-references**:
+- [INV-79] — the scoped agent-token daemon reuses this exact script (6-arg form), so all three rules above hold for the agent-side token too.
+- [INV-65] — the LIB_DIR realpath resolution the test's injection seam relies on.
