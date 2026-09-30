@@ -138,6 +138,15 @@ cp tests/e2e/e2e.conf.example tests/e2e/e2e.conf   # then edit for this box
 bash tests/e2e/run-agent-smoke.sh
 ```
 
+To onboard a box as a **CI live-smoke runner** instead (the self-hosted tier,
+[INV-77](invariants.md#inv-77-ci-is-two-tiers--hermetic-always-on--credential-free-live-agent-smoke-is-self-hosted-label-gated-and-advisory)),
+use the standard onboarding form — it probes the installed CLIs and writes the
+canonical per-box matrix path the workflow preflight reads:
+
+```bash
+bash tests/e2e/setup-live-runner.sh   # probe + generate + write; --dry-run previews
+```
+
 The example matrix covers: claude via Bedrock IAM role, codex via Bedrock IAM
 role (with the codex Bedrock region pinned — region pollution was the #180 root
 cause), kiro (workspace agent — the entry sets `KIRO_AGENT_NAME` to an agent the
