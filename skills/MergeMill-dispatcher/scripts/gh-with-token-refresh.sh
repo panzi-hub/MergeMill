@@ -24,11 +24,27 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 if [[ -n "${REAL_GH:-}" && -x "$REAL_GH" ]]; then
   : # explicit override — fall through to the exec at the bottom
 else
-  CLEAN_PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^${SELF_DIR}$" | tr '\n' ':' | sed 's/:$//')
-  REAL_GH=$(PATH="$CLEAN_PATH" command -v gh 2>/dev/null) || {
-    echo "ERROR: Cannot find real gh binary (looked in PATH minus ${SELF_DIR}). Set REAL_GH in MergeMill.conf to override (e.g. REAL_GH=/home/ubuntu/.linuxbrew/homebrew/bin/gh)." >&2
+  # Prefer known install locations. `command -v` stats every PATH entry and
+  # hangs forever on a dead automount; that left verdict comments stuck with
+  # no child gh and no GitHub connection.
+  for _gh_candidate in /opt/homebrew/bin/gh /usr/local/bin/gh /usr/bin/gh; do
+    if [[ -x "$_gh_candidate" ]]; then
+      REAL_GH="$_gh_candidate"
+      break
+    fi
+  done
+  if [[ -z "${REAL_GH:-}" ]]; then
+    CLEAN_PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^${SELF_DIR}$" | tr '\n' ':' | sed 's/:$//')
+    if command -v timeout >/dev/null 2>&1; then
+      REAL_GH=$(PATH="$CLEAN_PATH" timeout 5 command -v gh 2>/dev/null) || REAL_GH=""
+    else
+      REAL_GH=$(PATH="$CLEAN_PATH" command -v gh 2>/dev/null) || REAL_GH=""
+    fi
+  fi
+  if [[ -z "${REAL_GH:-}" || ! -x "$REAL_GH" ]]; then
+    echo "ERROR: Cannot find real gh binary (known paths and PATH minus ${SELF_DIR}). Set REAL_GH in MergeMill.conf to override (e.g. REAL_GH=/home/ubuntu/.linuxbrew/homebrew/bin/gh)." >&2
     exit 1
-  }
+  fi
 fi
 
 # Read latest token from file if available.

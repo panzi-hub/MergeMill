@@ -41,7 +41,6 @@ adapter_invoke_claude() {
   else
     claude_args=(
       --session-id "$session_id"
-      ${session_name:+--name "$session_name"}
       --permission-mode "$AGENT_PERMISSION_MODE"
       ${model:+--model "$model"}
       "${extra_args[@]}"
