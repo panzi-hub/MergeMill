@@ -102,7 +102,28 @@ fi
 itp_list_by_state()        { itp_${ISSUE_PROVIDER}_list_by_state "$@"; }
 itp_count_by_state()       { itp_${ISSUE_PROVIDER}_count_by_state "$@"; }
 itp_list_forbidden_combos(){ itp_${ISSUE_PROVIDER}_list_forbidden_combos "$@"; }
-itp_transition_state()     { itp_${ISSUE_PROVIDER}_transition_state "$@"; }
+# Central transition seam. Provider behavior remains unchanged, but every
+# successful state mutation emits a durable event for recovery/diagnostics.
+# The event write is best-effort and MUST never change the provider result.
+itp_transition_state() {
+  local issue="$1" remove="$2" add="$3" rc event_dir event_file reason
+  itp_${ISSUE_PROVIDER}_transition_state "$@"
+  rc=$?
+  [[ $rc -eq 0 ]] || return "$rc"
+
+  event_dir="${MERGEMILL_STATE_DIR:-${HOME:-/tmp}/.local/state/MergeMill-${PROJECT_ID:-unknown}}/state-events"
+  event_file="${event_dir}/issue-${issue}.jsonl"
+  reason="${MERGEMILL_STATE_REASON:-unspecified}"
+  if command -v jq >/dev/null 2>&1 && mkdir -p "$event_dir" 2>/dev/null; then
+    jq -cn \
+      --arg issue "$issue" --arg remove "$remove" --arg add "$add" \
+      --arg reason "$reason" --arg run_id "${RUN_ID:-}" \
+      --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{event:"state_transition",issue:($issue|tonumber),remove:$remove,add:$add,reason:$reason,run_id:$run_id,at:$at}' \
+      >>"$event_file" 2>/dev/null || true
+  fi
+  return 0
+}
 itp_read_task()            { itp_${ISSUE_PROVIDER}_read_task "$@"; }
 itp_post_comment()         { itp_${ISSUE_PROVIDER}_post_comment "$@"; }
 itp_edit_comment()         { itp_${ISSUE_PROVIDER}_edit_comment "$@"; }
