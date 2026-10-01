@@ -343,21 +343,11 @@ glab mr update {mr_number} --description "$(cat /tmp/pr_body.md)"
 
 ---
 
-## 步骤 9：等待所有 CI 检查完成（强制 -- 不可跳过）
+## 步骤 9：交付 CI 状态（强制，不由 Agent 轮询）
 
-在终端中执行。GitHub 通道使用 GitHub CLI；GitLab 通道使用 `glab`（或流水线的 `chp_ci_status` 接口，它将两个平台统一为 `green`/`pending`/`failed`/`none`）。
+开发 Agent 不得使用 `gh pr checks --watch`、`glab ci status --live` 或自行循环等待 CI。创建或更新 PR 后，输出当前 PR 编号并结束本轮；包装脚本和 dispatcher 会通过 `chp_ci_status` 统一读取 `green`/`pending`/`failed`/`none`，并在下一次 tick 中决定继续审查、回到开发或等待。
 
-```bash
-# GitHub 通道 (CODE_HOST=github):
-gh pr checks {pr_number} --watch --interval 30
-
-# GitLab 通道 (CODE_HOST=gitlab):
-glab ci status {mr_number}   # 较新版本的 glab 可加 `--live` 持续更新
-```
-
-所有检查都必须通过：Lint、单元测试、构建、部署预览、E2E 测试。
-
-如果任何检查失败：分析日志、修复、推送、重新观察。在所有检查都显示"pass"之前不要继续。
+Agent 只需在当前轮次确认改动对应的本地测试已通过，并在最终报告中列出 PR 编号和已知检查状态。CI 失败时由 dispatcher 将失败事实路由回开发，不要在模型会话中自行重试。
 
 ### 需要监控的检查
 
