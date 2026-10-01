@@ -315,6 +315,15 @@ _drops_out="$(_latest_review_drops)"
 if [[ -n "$_drops_out" ]]; then echo "$_drops_out"; else echo "  none recorded"; fi
 
 echo ""
+echo "── last state transition event ───────────────────────────────────"
+_EVENT_FILE="${MERGEMILL_STATE_DIR:-${HOME:-/tmp}/.local/state/MergeMill-${PROJECT_ID:-unknown}}/state-events/issue-${ISSUE_NUMBER}.jsonl"
+if [[ -s "$_EVENT_FILE" ]] && command -v jq >/dev/null 2>&1; then
+  tail -n 1 "$_EVENT_FILE" | jq -r '"  " + (.at // "") + "  " + (.remove // "") + " → " + (.add // "") + "  reason=" + (.reason // "unspecified") + (if (.run_id // "") != "" then "  run=" + .run_id else "" end)' 2>/dev/null || echo "  unreadable event record"
+else
+  echo "  none recorded"
+fi
+
+echo ""
 echo "── next dispatcher tick ──────────────────────────────────────────"
 echo "  $(_next_action)"
 echo "════════════════════════════════════════════════════════════════"
