@@ -85,6 +85,8 @@ source "${LIB_DIR}/lib-lane.sh" 2>/dev/null || true
 # must succeed), so sourced UNGUARDED from the skill tree like lib-agent.sh.
 # shellcheck source=lib-issue-provider.sh
 source "${LIB_DIR}/lib-issue-provider.sh"
+# Failure taxonomy is used when writing the normalized agent result.
+source "${LIB_DIR}/lib-failure-class.sh"
 # Per-side AGENT_CMD override (INV-37). Empty-string fallback already
 # applied inside lib-agent.sh; this just rebinds AGENT_CMD so the case
 # statements in run_agent / resume_agent dispatch to the dev-side CLI.
