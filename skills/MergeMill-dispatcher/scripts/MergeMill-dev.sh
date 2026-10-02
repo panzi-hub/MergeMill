@@ -1333,8 +1333,8 @@ EOF
   set -e
   if [[ -n "${RUN_DIR:-}" && -d "$RUN_DIR" && $(command -v jq >/dev/null 2>&1; echo $?) -eq 0 ]]; then
     jq -cn --arg session "$SESSION_ID" --arg mode new --arg cli "$AGENT_CMD" --arg rc "$AGENT_EXIT" \
-      --arg ended "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{schema_version:1,event:"agent_completed",session_id:$session,mode:$mode,cli:$cli,rc:($rc|tonumber),ended_at:$ended}' \
+      --arg ended "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg failure_class "$(classify_failure dev "$AGENT_EXIT" "")" \
+      '{schema_version:1,event:"agent_completed",session_id:$session,mode:$mode,cli:$cli,rc:($rc|tonumber),failure_class:$failure_class,ended_at:$ended}' \
       >"$RUN_DIR/agent-result.json" 2>/dev/null || true
   fi
 
@@ -1533,8 +1533,8 @@ EOF
   set -e
   if [[ -n "${RUN_DIR:-}" && -d "$RUN_DIR" && $(command -v jq >/dev/null 2>&1; echo $?) -eq 0 ]]; then
     jq -cn --arg session "$SESSION_ID" --arg mode resume --arg cli "$AGENT_CMD" --arg rc "$AGENT_EXIT" \
-      --arg ended "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{schema_version:1,event:"agent_completed",session_id:$session,mode:$mode,cli:$cli,rc:($rc|tonumber),ended_at:$ended}' \
+      --arg ended "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg failure_class "$(classify_failure dev "$AGENT_EXIT" "")" \
+      '{schema_version:1,event:"agent_completed",session_id:$session,mode:$mode,cli:$cli,rc:($rc|tonumber),failure_class:$failure_class,ended_at:$ended}' \
       >"$RUN_DIR/agent-result.json" 2>/dev/null || true
   fi
 
