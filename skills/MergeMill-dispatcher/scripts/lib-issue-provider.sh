@@ -95,6 +95,11 @@ if ! declare -F _provider_read_cap >/dev/null 2>&1; then
   }
 fi
 
+# Optional shared failure taxonomy; callers may use classify_failure without
+# making provider loading depend on the helper's presence.
+# shellcheck source=lib-failure-class.sh
+source "${_LIB_ITP_SCRIPTS_DIR:-$(dirname "${BASH_SOURCE[0]}")}/lib-failure-class.sh" 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # ITP verb shims (spec §3.1). Each forwards "$@" to itp_${ISSUE_PROVIDER}_<verb>
 # — byte-for-byte the lib-agent.sh:597 adapter_invoke_"$AGENT_CMD" … "$@" shape.
