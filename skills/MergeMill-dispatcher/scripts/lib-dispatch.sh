@@ -947,6 +947,21 @@ is_session_completed() {
   # is the wrong value to check under split-CLI deployments
   # (e.g. AGENT_CMD=claude AGENT_DEV_CMD=codex).
   local _dev_cmd="${AGENT_DEV_CMD:-${AGENT_CMD:-claude}}"
+  # Prefer the wrapper's normalized durable result over CLI-specific logs. This
+  # covers every adapter and also handles a wrapper that exited after writing
+  # its result but before its PID/heartbeat cleanup completed.
+  if [[ "${EXECUTION_BACKEND:-local}" == "local" ]] && command -v jq >/dev/null 2>&1; then
+    local _runs_root="${MERGEMILL_RUN_DIR_BASE:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/MergeMill-${PROJECT_ID}/runs}"
+    local _result _result_rc _result_reason
+    _result="$(find "$_runs_root" -type f \( -path "*-${issue_num}-dev-*/agent-result.json" -o -path "*-${issue_num}-review-*/agent-result.json" \) -print 2>/dev/null | sort | tail -n 1)"
+    if [[ -n "$_result" ]] && jq -e '(.event == "agent_completed") and (.session_id != null) and (.rc != null)' "$_result" >/dev/null 2>&1; then
+      _result_rc="$(jq -r '.rc' "$_result" 2>/dev/null)"
+      _result_reason="$(jq -r 'if .rc == 0 then "completed" else "failed" end' "$_result" 2>/dev/null)"
+      if [[ -n "$reason_var" ]]; then printf -v "$reason_var" '%s' "$_result_reason"; fi
+      if [[ -n "$end_ts_var" ]]; then printf -v "$end_ts_var" '%s' "$(jq -r '.ended_at // empty' "$_result" 2>/dev/null)"; fi
+      return 0
+    fi
+  fi
   [ "$_dev_cmd" = "claude" ] || return 1
 
   local last_line log_file _end_epoch=""
