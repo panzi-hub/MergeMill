@@ -18,19 +18,20 @@
 
 ## 🇨🇳 中文
 
-MergeMill 是一个全自动开发流水线，将 Issue 转化为已合并的 Pull Request——无需人工干预。
+MergeMill 是一个自动化开发流水线，将 Issue 转化为 Pull Request，并按仓库策略完成审查与合并。合并审批受平台权限约束：例如 GitHub 不允许 PR 作者批准自己的 PR，因此需要其他有权限的 reviewer 或配置允许的合并流程。
 
 它会扫描带有 `MergeMill` 标签的 Issue，调度一个 **Dev Agent（开发 Agent）** 在隔离的 worktree 中通过 TDD（测试驱动开发）实现功能，然后移交给 **Review Agent（审查 Agent）** 进行代码审查和可选的 E2E 验证。整个循环按 cron 定时无人值守运行。
 
 ### 特性
 
-- **全自动闭环**：Issue 创建 → 自动开发 → 自动审查 → 自动合并，零人工参与
+- **自动化开发闭环**：Issue 扫描、Agent 开发与审查、按仓库规则处理合并；可能需要人工审批
 - **多 Agent CLI 支持**：Claude Code、Codex CLI、Kiro CLI、opencode、Cursor Agent、Antigravity CLI (agy)，以及所有支持 `-p <prompt>` 非交互式标志的 CLI
 - **多平台**：GitHub 和 GitLab（gitlab.com 及自托管实例），通过可插拔 provider 接口接入
 - **TDD 工作流**：测试用例文档 → 单元测试 → 实现 → 验证，强制覆盖率 >80%
 - **多 Agent 审查**：可配置多个独立审查 Agent 并行运行，要求一致通过才合并
 - **E2E 验证**：支持浏览器自动化（Chrome DevTools MCP）或命令行模式的端到端测试
-- **崩溃恢复**：僵死检测 + 会话恢复，支持从上次中断处继续
+- **可观测运行状态**：每次运行保存 run ID、attempt、日志和 Agent 结果；状态迁移写入 JSONL 事件，`status.sh` 可查看最近结果与下一次调度动作
+- **安全恢复**：`recover.sh` 默认只读；目前仅允许在开发 wrapper 的 PID/heartbeat 已失效且存在关联 PR 时，将 `in-progress` 转为 `pending-review`，其他情况拒绝自动修改
 
 ### 快速开始
 
@@ -72,13 +73,16 @@ Dispatcher（cron tick）──▶ Dev Agent ──────────▶ R
                             创建 PR               审批 + 合并
 ```
 
-Issue 通过 Agent 自动管理的标签流转：
+Issue 通过 dispatcher 和 Agent 协作管理标签流转。Dispatcher 按 cron 轮询；标签是兼容状态投影，运行记录和迁移事件用于诊断。Agent 完成结果统一写入 `agent-result.json`，包含退出码和失败分类：
 
 ```
-MergeMill → in-progress → pending-review → reviewing → approved（已合并）
-                                                 │
-                                                 └─→ pending-dev（审查失败则回到开发循环）
+MergeMill → in-progress → pending-review → reviewing → approved（审查/合并完成）
+      │              │                                  │
+      │              └─ dead dev wrapper + linked PR → recover.sh 可安全转交
+      │                                                 └─→ pending-dev（审查失败）
 ```
+
+失败分类：transient / agent / code / policy / configuration。分类写入运行结果，供状态排查；dispatcher 仍保留现有 PID、heartbeat 与 dispatch marker 控制。Webhook 驱动和独立 lease 服务尚未实现。
 
 ### 安全性
 
@@ -102,19 +106,20 @@ MergeMill → in-progress → pending-review → reviewing → approved（已合
 
 ## 🇺🇸 English
 
-MergeMill is a fully automated development pipeline that turns Issues into merged Pull Requests — with zero human intervention.
+MergeMill is an automated development pipeline that turns Issues into Pull Requests and completes review/merge according to repository policy. Platform permissions still apply: for example, GitHub does not allow a PR author to approve their own PR, so another authorized reviewer or an allowed merge path may be required.
 
 It scans Issues labeled `MergeMill`, dispatches a **Dev Agent** to implement features through TDD in isolated worktrees, then hands off to a **Review Agent** for code review and optional E2E verification. The entire cycle runs unattended on a cron schedule.
 
 ### Features
 
-- **Fully automated loop**: Issue creation → auto development → auto review → auto merge, without human involvement
+- **Automated development loop**: issue scanning, agent implementation and review, with merge behavior governed by repository policy; human approval may be required
 - **Multi-Agent CLI support**: Claude Code, Codex CLI, Kiro CLI, opencode, Cursor Agent, Antigravity CLI (agy), and any CLI accepting `-p <prompt>`
 - **Multi-platform**: GitHub and GitLab (gitlab.com and self-hosted instances) via pluggable provider seams
 - **TDD workflow**: Test case docs → unit tests → implementation → verification, enforcing >80% coverage
 - **Multi-Agent review**: Configurable parallel independent review agents with unanimous-PASS gating
 - **E2E verification**: Browser automation (Chrome DevTools MCP) or command-mode end-to-end testing
-- **Crash recovery**: Stale detection + session resume, picking up from the last checkpoint
+- **Run observability**: Each run records a run ID, attempt, logs, and normalized Agent result; state transitions are appended as JSONL events and surfaced by `status.sh`
+- **Guarded recovery**: `recover.sh` is read-only by default. Its current apply path only hands off `in-progress` to `pending-review` when the dev wrapper PID/heartbeat is stale and a linked PR exists; it refuses other cases
 
 ### Quick Start
 
@@ -156,13 +161,16 @@ Dispatcher (cron tick)──▶ Dev Agent ──────────▶ Revi
                             create PR            approve + merge
 ```
 
-Issues flow through labels managed automatically by agents:
+The dispatcher and agents coordinate issue labels. The dispatcher remains cron/poll driven; labels are the backward-compatible state projection, while run records and transition events provide diagnostics. Agent completion is normalized in `agent-result.json` with an exit code and failure class:
 
 ```
-MergeMill → in-progress → pending-review → reviewing → approved (merged)
-                                                 │
-                                                 └─→ pending-dev (back to dev on review failure)
+MergeMill → in-progress → pending-review → reviewing → approved (review/merge complete)
+      │              │                                  │
+      │              └─ dead dev wrapper + linked PR → safe handoff via recover.sh
+      │                                                 └─→ pending-dev (review failure)
 ```
+
+Failure classes: transient / agent / code / policy / configuration. They are recorded for diagnosis; dispatch still relies on the existing PID, heartbeat, and dispatch-marker controls. Webhook-driven dispatch and a standalone lease service are not implemented yet.
 
 ### Security
 
@@ -186,19 +194,20 @@ MergeMill → in-progress → pending-review → reviewing → approved (merged)
 
 ## 🇯🇵 日本語
 
-MergeMill（マージミル）は、Issue をマージ済みの Pull Request に変換する完全自動開発パイプラインです——人の介入は一切不要です。
+MergeMill（マージミル）は、Issue から Pull Request までの開発を自動化し、リポジトリのポリシーに従ってレビューとマージを進めるパイプラインです。プラットフォームの権限規則は適用されます。たとえば GitHub では PR 作成者自身は承認できないため、別の権限を持つ reviewer、または許可されたマージ手順が必要な場合があります。
 
 `MergeMill` ラベルが付いた Issue をスキャンし、**Dev Agent（開発エージェント）** を隔離された worktree にディスパッチして TDD（テスト駆動開発）で機能を実装、その後 **Review Agent（レビューエージェント）** に引き継いでコードレビューとオプションの E2E 検証を行います。全サイクルは cron スケジュールで無人実行されます。
 
 ### 主な機能
 
-- **完全自律ループ**：Issue 作成 → 自動開発 → 自動レビュー → 自動マージ、人の関与ゼロ
+- **開発の自動化**：Issue のスキャン、Agent による実装とレビューを行い、マージはリポジトリのポリシーに従います。人の承認が必要な場合があります
 - **マルチ Agent CLI 対応**：Claude Code、Codex CLI、Kiro CLI、opencode、Cursor Agent、Antigravity CLI (agy)、および `-p <prompt>` 非対話フラグを受け付ける任意の CLI
 - **マルチプラットフォーム**：GitHub および GitLab（gitlab.com とセルフホストインスタンス）をプラグ可能なプロバイダーインターフェースでサポート
 - **TDD ワークフロー**：テストケース文書 → 単体テスト → 実装 → 検証、80% 以上のカバレッジを強制
 - **マルチ Agent レビュー**：複数の独立したレビューエージェントを並列実行し、全会一致の PASS のみマージ
 - **E2E 検証**：ブラウザ自動化（Chrome DevTools MCP）またはコマンドモードのエンドツーエンドテスト
-- **クラッシュリカバリ**： stale 検出 + セッション復旧、中断点からの再開
+- **実行状態の可視化**：run ID、attempt、ログ、正規化された Agent 結果を保存し、状態遷移を JSONL イベントに記録。`status.sh` で確認できます
+- **安全な復旧**：`recover.sh` はデフォルトで読み取り専用です。現在 `--apply` で許可されるのは、dev wrapper の PID/heartbeat が失効し、関連 PR がある場合の `in-progress` → `pending-review` のみです。それ以外は拒否します
 
 ### クイックスタート
 
@@ -240,13 +249,16 @@ Dispatcher（cron tick）──▶ Dev Agent ──────────▶ R
                              PR 作成               承認 + マージ
 ```
 
-Issue はエージェントが自動管理するラベルで状態遷移：
+Issue のラベル遷移は dispatcher と Agent が協調して管理します。dispatcher は cron によるポーリングを継続し、ラベルを後方互換の状態投影として使用します。実行記録と遷移イベントは診断用です。Agent の完了結果は終了コードと失敗分類を含む `agent-result.json` に統一されます：
 
 ```
-MergeMill → in-progress → pending-review → reviewing → approved（マージ済み）
-                                                 │
-                                                 └─→ pending-dev（レビュー失敗で開発ループに戻る）
+MergeMill → in-progress → pending-review → reviewing → approved（レビュー/マージ完了）
+      │              │                                  │
+      │              └─ dev wrapper の PID/heartbeat が失効 + 関連 PR → recover.sh で安全に引き継ぎ
+      │                                                 └─→ pending-dev（レビュー失敗）
 ```
+
+失敗分類：transient / agent / code / policy / configuration。診断のため実行結果に記録します。dispatcher は引き続き PID、heartbeat、dispatch marker を使用します。Webhook 駆動と独立 lease サービスはまだ実装されていません。
 
 ### セキュリティ
 
