@@ -103,6 +103,29 @@ functions** (`pid_alive`, `count_retries`, `fetch_pr_for_issue`,
 it can never drift from what the tick actually does ([INV-81](invariants.md#inv-81-every-wrapper-run-mints-a-run-id-and-a-durable-per-run-artifact-dir-the-run-id-threads-through-logs-metrics-and-every-wrapper-posted-comment-footer-statussh-answers-pipeline-state-from-the-dispatchers-real-predicates-observe-only--never-changes-wrapper-rc-or-labels)
 predicate-parity rule).
 
+### Fleet view + machine-readable output (issue #12)
+
+The same read-only tool has a fleet view and a stable machine-readable mode:
+
+```bash
+bash scripts/status.sh --all            # every OPEN `MergeMill` issue, one block each
+bash scripts/status.sh --issue 235      # explicit selector — identical to positional
+bash scripts/status.sh 235 --json       # stable JSON object (schema_version 1)
+bash scripts/status.sh --all --json     # {schema_version, project, repo, generated_at, issues:[…]}
+```
+
+The single-issue report now also prints the derived `agent` (dev|review), the
+latest `run` + `attempt`, the last run's `rc`/`outcome`/`failure_class`, and a
+`stale:` line. `--json` exposes every one of those as a fixed field set, with
+`null` + a `diagnostics[]` entry wherever a fact is undeterminable — a missing
+run dir, a corrupt `agent-result.json`, an absent PR, and stale/expired PID or
+heartbeat files never abort the command. Staleness is *reported, not repaired*:
+`stale_pid` (PID file whose process is dead), `heartbeat_stale` (`.heartbeat`
+older than `3 × HEARTBEAT_INTERVAL_SECONDS`), `stale_run` (a run dir with no
+`ended_at` older than `STATUS_STALE_RUN_SECONDS`, default 3600). Exit codes: `0`
+ok, `2` usage, `3` missing dependency, `4` enumeration failed, `5` issue not
+found. Secrets are never included.
+
 ### The four canonical "stuck" states
 
 | `status.sh` shows | Means | Next tick |

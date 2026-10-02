@@ -30,7 +30,7 @@ MergeMill 是一个自动化开发流水线，将 Issue 转化为 Pull Request�
 - **TDD 工作流**：测试用例文档 → 单元测试 → 实现 → 验证，强制覆盖率 >80%
 - **多 Agent 审查**：可配置多个独立审查 Agent 并行运行，要求一致通过才合并
 - **E2E 验证**：支持浏览器自动化（Chrome DevTools MCP）或命令行模式的端到端测试
-- **可观测运行状态**：每次运行保存 run ID、attempt、日志和 Agent 结果；状态迁移写入 JSONL 事件，`status.sh` 可查看最近结果与下一次调度动作
+- **可观测运行状态**：每次运行保存 run ID、attempt、日志和 Agent 结果；状态迁移写入 JSONL 事件，`status.sh` 可查看最近结果与下一次调度动作（`status.sh --all` 汇总所有相关 Issue，`--issue <n>` 选择单个，`--json` 输出稳定机器可读结构）
 - **安全恢复**：`recover.sh` 默认只读；目前仅允许在开发 wrapper 的 PID/heartbeat 已失效且存在关联 PR 时，将 `in-progress` 转为 `pending-review`，其他情况拒绝自动修改
 
 ### 快速开始
@@ -118,7 +118,7 @@ It scans Issues labeled `MergeMill`, dispatches a **Dev Agent** to implement fea
 - **TDD workflow**: Test case docs → unit tests → implementation → verification, enforcing >80% coverage
 - **Multi-Agent review**: Configurable parallel independent review agents with unanimous-PASS gating
 - **E2E verification**: Browser automation (Chrome DevTools MCP) or command-mode end-to-end testing
-- **Run observability**: Each run records a run ID, attempt, logs, and normalized Agent result; state transitions are appended as JSONL events and surfaced by `status.sh`
+- **Run observability**: Each run records a run ID, attempt, logs, and normalized Agent result; state transitions are appended as JSONL events and surfaced by `status.sh` (`--all` for every relevant issue, `--issue <n>` for one, `--json` for a stable machine-readable object)
 - **Guarded recovery**: `recover.sh` is read-only by default. Its current apply path only hands off `in-progress` to `pending-review` when the dev wrapper PID/heartbeat is stale and a linked PR exists; it refuses other cases
 
 ### Quick Start
@@ -206,7 +206,7 @@ MergeMill（マージミル）は、Issue から Pull Request までの開発を
 - **TDD ワークフロー**：テストケース文書 → 単体テスト → 実装 → 検証、80% 以上のカバレッジを強制
 - **マルチ Agent レビュー**：複数の独立したレビューエージェントを並列実行し、全会一致の PASS のみマージ
 - **E2E 検証**：ブラウザ自動化（Chrome DevTools MCP）またはコマンドモードのエンドツーエンドテスト
-- **実行状態の可視化**：run ID、attempt、ログ、正規化された Agent 結果を保存し、状態遷移を JSONL イベントに記録。`status.sh` で確認できます
+- **実行状態の可視化**：run ID、attempt、ログ、正規化された Agent 結果を保存し、状態遷移を JSONL イベントに記録。`status.sh` で確認できます（`--all` で全対象 Issue、`--issue <n>` で単一、`--json` で安定した機械可読出力）
 - **安全な復旧**：`recover.sh` はデフォルトで読み取り専用です。現在 `--apply` で許可されるのは、dev wrapper の PID/heartbeat が失効し、関連 PR がある場合の `in-progress` → `pending-review` のみです。それ以外は拒否します
 
 ### クイックスタート
