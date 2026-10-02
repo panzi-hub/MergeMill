@@ -120,6 +120,7 @@ _write_run_meta() {
       --arg run_id "${RUN_ID:-}" \
       --arg project "${PROJECT_ID:-}" \
       --arg issue "${_RUN_ISSUE:-}" \
+      --arg attempt "${MERGEMILL_ATTEMPT:-}" \
       --arg side "${_RUN_SIDE:-}" \
       --arg started_at "${_RUN_STARTED_AT:-}" \
       --arg ended_at "${_RUN_ENDED_AT:-}" \
@@ -129,7 +130,7 @@ _write_run_meta() {
       --arg run_log "${dir}/run.log" \
       --argjson host_env "$env_summary" \
       '{schema_version:$sv, run_id:$run_id, project:$project, issue:$issue,
-        side:$side, started_at:$started_at, log_pointer:$log_pointer,
+        attempt:($attempt|tonumber? // $attempt), side:$side, started_at:$started_at, log_pointer:$log_pointer,
         run_log:$run_log, host_env:$host_env}
        + (if $ended_at   != "" then {ended_at:$ended_at}                 else {} end)
        + (if $rc          != "" then {rc:($rc|tonumber? // $rc)}          else {} end)
@@ -173,7 +174,17 @@ run_artifacts_init() {
   chmod 700 "$dir" 2>/dev/null || true
 
   RUN_DIR="$dir"
-  export RUN_ID RUN_DIR
+  # Attempt is the monotonic per-side execution number for this issue. Keep it
+  # local to the durable run store so retries/resumes are distinguishable even
+  # when a wrapper is launched from a fresh process.
+  local _attempt=1 _run_parent _run_name
+  _run_parent="${dir%/*}"
+  for _run_name in "${_run_parent}/${PROJECT_ID}-${issue}-${side}-"*; do
+    [[ -d "$_run_name" && "$_run_name" != "$dir" ]] || continue
+    _attempt=$((_attempt + 1))
+  done
+  MERGEMILL_ATTEMPT="${MERGEMILL_ATTEMPT:-$_attempt}"
+  export RUN_ID RUN_DIR MERGEMILL_ATTEMPT
   _RUN_SIDE="$side"
   _RUN_ISSUE="$issue"
   _RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
@@ -305,6 +316,16 @@ run_footer() {
   printf '\n---\nrun-id: %s · artifacts: %s\n' "${RUN_ID}" "${RUN_DIR:-<none>}"
 }
 
+# _run_iso_epoch <iso> — portable ISO-8601 parser for GNU and BSD date.
+_run_iso_epoch() {
+  local iso="$1" epoch=""
+  epoch="$(date -u -d "$iso" +%s 2>/dev/null || true)"
+  if [[ ! "$epoch" =~ ^[0-9]+$ ]]; then
+    epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$iso" +%s 2>/dev/null || true)"
+  fi
+  [[ "$epoch" =~ ^[0-9]+$ ]] && printf '%s\n' "$epoch"
+}
+
 # run_prune [days] [issue] — remove wrapper-run-id dirs older than `days`
 # (default 30). Only dirs matching the wrapper-run-id glob are candidates, so
 # #233's bare-UUID per-agent dirs are never touched. The ACTIVE run-id (current
@@ -346,7 +367,7 @@ run_prune() {
     if [[ -f "$d/meta.json" ]] && command -v jq >/dev/null 2>&1; then
       started_iso="$(jq -r '.started_at // empty' "$d/meta.json" 2>/dev/null)" || started_iso=""
       if [[ -n "$started_iso" ]]; then
-        started_epoch="$(date -u -d "$started_iso" +%s 2>/dev/null || echo '')"
+        started_epoch="$(_run_iso_epoch "$started_iso" 2>/dev/null || echo '')"
       fi
     fi
     if [[ -z "$started_epoch" ]]; then

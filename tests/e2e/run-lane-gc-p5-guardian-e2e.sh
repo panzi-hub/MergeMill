@@ -132,6 +132,7 @@ echo "=== TC-LGC5-E2E-01: real MergeMill-dev.sh installs lane+guardian, SIGKILL 
 setsid env \
   PATH="$BIN:$PATH" \
   GH_TOKEN="e2e-fixture-token-not-real" \
+  REAL_GH="$BIN/gh" \
   MERGEMILL_PID_DIR="$PIDDIR" \
   ADT_STATE_ROOT="$STATE_ROOT" \
   MERGEMILL_CONF="$PROJDIR/scripts/MergeMill.conf" \

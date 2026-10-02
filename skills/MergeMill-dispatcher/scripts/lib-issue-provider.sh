@@ -95,6 +95,11 @@ if ! declare -F _provider_read_cap >/dev/null 2>&1; then
   }
 fi
 
+# Optional shared failure taxonomy; callers may use classify_failure without
+# making provider loading depend on the helper's presence.
+# shellcheck source=lib-failure-class.sh
+source "${_LIB_ITP_SCRIPTS_DIR:-$(dirname "${BASH_SOURCE[0]}")}/lib-failure-class.sh" 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # ITP verb shims (spec §3.1). Each forwards "$@" to itp_${ISSUE_PROVIDER}_<verb>
 # — byte-for-byte the lib-agent.sh:597 adapter_invoke_"$AGENT_CMD" … "$@" shape.
@@ -102,7 +107,29 @@ fi
 itp_list_by_state()        { itp_${ISSUE_PROVIDER}_list_by_state "$@"; }
 itp_count_by_state()       { itp_${ISSUE_PROVIDER}_count_by_state "$@"; }
 itp_list_forbidden_combos(){ itp_${ISSUE_PROVIDER}_list_forbidden_combos "$@"; }
-itp_transition_state()     { itp_${ISSUE_PROVIDER}_transition_state "$@"; }
+# Central transition seam. Provider behavior remains unchanged, but every
+# successful state mutation emits a durable event for recovery/diagnostics.
+# The event write is best-effort and MUST never change the provider result.
+itp_transition_state() {
+  local issue="$1" remove="$2" add="$3" rc event_dir event_file reason
+  itp_${ISSUE_PROVIDER}_transition_state "$@"
+  rc=$?
+  [[ $rc -eq 0 ]] || return "$rc"
+
+  event_dir="${MERGEMILL_STATE_DIR:-${HOME:-/tmp}/.local/state/MergeMill-${PROJECT_ID:-unknown}}/state-events"
+  event_file="${event_dir}/issue-${issue}.jsonl"
+  reason="${MERGEMILL_STATE_REASON:-unspecified}"
+  if command -v jq >/dev/null 2>&1 && mkdir -p "$event_dir" 2>/dev/null; then
+    jq -cn \
+      --arg issue "$issue" --arg remove "$remove" --arg add "$add" \
+      --arg reason "$reason" --arg run_id "${RUN_ID:-}" \
+      --arg attempt "${MERGEMILL_ATTEMPT:-}" \
+      --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{event:"state_transition",issue:($issue|tonumber),remove:$remove,add:$add,reason:$reason,run_id:$run_id,attempt:$attempt,at:$at}' \
+      >>"$event_file" 2>/dev/null || true
+  fi
+  return 0
+}
 itp_read_task()            { itp_${ISSUE_PROVIDER}_read_task "$@"; }
 itp_post_comment()         { itp_${ISSUE_PROVIDER}_post_comment "$@"; }
 itp_edit_comment()         { itp_${ISSUE_PROVIDER}_edit_comment "$@"; }

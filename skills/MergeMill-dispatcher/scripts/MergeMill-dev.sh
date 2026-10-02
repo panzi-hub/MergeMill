@@ -85,6 +85,8 @@ source "${LIB_DIR}/lib-lane.sh" 2>/dev/null || true
 # must succeed), so sourced UNGUARDED from the skill tree like lib-agent.sh.
 # shellcheck source=lib-issue-provider.sh
 source "${LIB_DIR}/lib-issue-provider.sh"
+# Failure taxonomy is used when writing the normalized agent result.
+source "${LIB_DIR}/lib-failure-class.sh"
 # Per-side AGENT_CMD override (INV-37). Empty-string fallback already
 # applied inside lib-agent.sh; this just rebinds AGENT_CMD so the case
 # statements in run_agent / resume_agent dispatch to the dev-side CLI.
@@ -1331,6 +1333,12 @@ EOF
   run_agent "$SESSION_ID" "$PROMPT" "$AGENT_DEV_MODEL" "$SESSION_NAME" 2>&1
   AGENT_EXIT=$?
   set -e
+  if [[ -n "${RUN_DIR:-}" && -d "$RUN_DIR" && $(command -v jq >/dev/null 2>&1; echo $?) -eq 0 ]]; then
+    jq -cn --arg session "$SESSION_ID" --arg mode new --arg cli "$AGENT_CMD" --arg rc "$AGENT_EXIT" \
+      --arg ended "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg failure_class "$(classify_failure dev "$AGENT_EXIT" "")" \
+      '{schema_version:1,event:"agent_completed",session_id:$session,mode:$mode,cli:$cli,rc:($rc|tonumber),failure_class:$failure_class,ended_at:$ended}' \
+      >"$RUN_DIR/agent-result.json" 2>/dev/null || true
+  fi
 
 elif [[ "$MODE" = "resume" ]]; then
   # Fetch review feedback from issue comments.
@@ -1525,6 +1533,12 @@ EOF
   resume_agent "$SESSION_ID" "$RESUME_PROMPT" "$AGENT_DEV_MODEL" "" 2>&1
   AGENT_EXIT=$?
   set -e
+  if [[ -n "${RUN_DIR:-}" && -d "$RUN_DIR" && $(command -v jq >/dev/null 2>&1; echo $?) -eq 0 ]]; then
+    jq -cn --arg session "$SESSION_ID" --arg mode resume --arg cli "$AGENT_CMD" --arg rc "$AGENT_EXIT" \
+      --arg ended "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg failure_class "$(classify_failure dev "$AGENT_EXIT" "")" \
+      '{schema_version:1,event:"agent_completed",session_id:$session,mode:$mode,cli:$cli,rc:($rc|tonumber),failure_class:$failure_class,ended_at:$ended}' \
+      >"$RUN_DIR/agent-result.json" 2>/dev/null || true
+  fi
 
   # If resume failed, fallback to new session
   if [[ $AGENT_EXIT -ne 0 ]]; then

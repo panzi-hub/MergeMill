@@ -228,7 +228,7 @@ echo "== init / finalize / meta =="
   export LOG_FILE="$TMP_ROOT/tmplog97-agent-proj-issue-777.log"
   # Seed with pre-existing agent output so we verify the body survives the rewrite.
   printf 'prior agent line A\nprior agent line B\n' > "$LOG_FILE"
-  _ino_before="$(stat -c %i "$LOG_FILE" 2>/dev/null || echo 0)"
+  _ino_before="$(stat -c %i "$LOG_FILE" 2>/dev/null || stat -f %i "$LOG_FILE" 2>/dev/null || echo 0)"
 
   # RUN 1
   unset RUN_ID RUN_DIR
@@ -254,7 +254,7 @@ echo "== init / finalize / meta =="
   assert_contains "TC-097e prior seed line preserved" "prior agent line A" "$(cat "$LOG_FILE")"
   assert_contains "TC-097f RUN1 agent output preserved" "agent output produced during RUN1" "$(cat "$LOG_FILE")"
   # Inode preserved → an open append fd from dispatch-local.sh keeps writing live.
-  _ino_after="$(stat -c %i "$LOG_FILE" 2>/dev/null || echo 1)"
+  _ino_after="$(stat -c %i "$LOG_FILE" 2>/dev/null || stat -f %i "$LOG_FILE" 2>/dev/null || echo 1)"
   assert_eq "TC-097g log inode preserved across the rewrite (open >> fd not orphaned)" \
     "$_ino_before" "$_ino_after"
 )
