@@ -118,8 +118,9 @@ itp_transition_state() {
     jq -cn \
       --arg issue "$issue" --arg remove "$remove" --arg add "$add" \
       --arg reason "$reason" --arg run_id "${RUN_ID:-}" \
+      --arg attempt "${MERGEMILL_ATTEMPT:-}" \
       --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{event:"state_transition",issue:($issue|tonumber),remove:$remove,add:$add,reason:$reason,run_id:$run_id,at:$at}' \
+      '{event:"state_transition",issue:($issue|tonumber),remove:$remove,add:$add,reason:$reason,run_id:$run_id,attempt:$attempt,at:$at}' \
       >>"$event_file" 2>/dev/null || true
   fi
   return 0
