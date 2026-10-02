@@ -1,6 +1,6 @@
 # Dispatcher Flow (per cron tick)
 
-The dispatcher runs as a cron job (default every 5 minutes). It is intentionally stateless in memory across ticks, but successful state transitions now emit durable JSONL events under the MergeMill state directory. Each tick reads labels, run artifacts, event history, and PID files before making decisions. Labels remain the backward-compatible GitHub projection; event records provide additional recovery and diagnostics context.
+The dispatcher runs as a cron job (default every 5 minutes). It is intentionally stateless in memory across ticks, but successful state transitions now emit durable JSONL events under the MergeMill state directory. Each tick reads labels, run artifacts, event history, and PID files before making decisions. Labels remain the backward-compatible GitHub projection; event records provide additional recovery and diagnostics context. Wrapper completion is also normalized into each run's `agent-result.json`, so completion detection no longer depends on a CLI-specific result line.
 
 The behavior described here is implemented by `skills/MergeMill-dispatcher/scripts/dispatcher-tick.sh` (the per-project entry point) backed by `skills/MergeMill-dispatcher/scripts/lib-dispatch.sh` (composable helpers — one function per gh/jq query). The dispatcher agent reads `SKILL.md` and runs `bash "$PROJECT_DIR/scripts/dispatcher-tick.sh"`; that script does everything described below in one process. Function names cited below (e.g. `count_active`, `check_deps_resolved`) are defined in `lib-dispatch.sh`.
 
