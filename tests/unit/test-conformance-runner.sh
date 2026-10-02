@@ -328,7 +328,7 @@ rm -rf "$LB"
 # (the assertion is per-element + length, not a coarse "is the binary right").
 LB=$(mktemp -d)
 # Drop the trailing `--output-format json` pair → length mismatch with the real argv.
-jq '.command.argv=["claude","--session-id","<uuid>","--name","conformance","--permission-mode","<permission-mode>","--model","sonnet","-p"]' \
+jq '.command.argv=["claude","--session-id","<uuid>","--permission-mode","<permission-mode>","--model","sonnet","-p"]' \
   "$FIXTURES/claude-dev-new.json" > "$LB/argv-short.json"
 short_out="$(CONFORMANCE_FIXTURE_DIR="$LB" env -u PROJECT_DIR bash "$RUNNER" 2>/dev/null)"
 assert_contains "TC-CONFORMANCE-031 dropped argv flag → FAIL argv-mismatch" \

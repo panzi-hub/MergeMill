@@ -496,6 +496,14 @@ The per-CLI behavior is extracted into one file per CLI under
 No orchestration-core change is needed beyond the dispatch arms + source loop —
 that is the whole point of [INV-75](invariants.md#inv-75-all-per-cli-behavior-lives-in-that-clis-adapter--inline-cli-conditionals-in-orchestration-code-are-a-defect).
 
+### Claude Code session arguments
+
+The Claude adapter MUST use the supported `--session-id` option for `dev-new` and
+`--resume` for `dev-resume`. It MUST NOT pass a `--name` option: current Claude
+Code releases reject that flag. MergeMill keeps the human-readable session name
+in its run metadata and issue comments instead of relying on a provider-specific
+CLI display-name flag. The conformance manifests pin this argument contract.
+
 ---
 
 ## Cross-references

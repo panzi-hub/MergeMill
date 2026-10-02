@@ -12,8 +12,6 @@
       "claude",
       "--session-id",
       "<uuid>",
-      "--name",
-      "conformance",
       "--permission-mode",
       "<permission-mode>",
       "--model",
