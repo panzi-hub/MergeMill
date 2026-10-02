@@ -3768,11 +3768,16 @@ if [[ "$PASSED_VERDICT" == "true" ]]; then
   # except the same-actor case: GitHub rejects "Can not approve your own pull
   # request" when dev and review share one identity. That is not a permission
   # outage — skip the approve and continue into the merge below.
-  set +e
-  APPROVE_OUT=$(chp_approve "$PR_NUMBER" \
-    "All acceptance criteria verified.$(if [[ "${E2E_ACTIVE:-false}" == "true" ]]; then echo " E2E verification passed."; fi)" 2>&1)
-  APPROVE_RC=$?
-  set -e
+  APPROVE_TMP="$(mktemp "${TMPDIR:-/tmp}/mergemill-approve.XXXXXX")"
+  APPROVE_OUT=""
+  if chp_approve "$PR_NUMBER" \
+    "All acceptance criteria verified.$(if [[ "${E2E_ACTIVE:-false}" == "true" ]]; then echo " E2E verification passed."; fi)" >"$APPROVE_TMP" 2>&1; then
+    APPROVE_RC=0
+  else
+    APPROVE_RC=$?
+  fi
+  APPROVE_OUT="$(cat "$APPROVE_TMP" 2>/dev/null || true)"
+  rm -f "$APPROVE_TMP" 2>/dev/null || true
   [[ -n "$APPROVE_OUT" ]] && log "chp_approve output: ${APPROVE_OUT}"
   if [[ $APPROVE_RC -eq 0 ]]; then
     log "PR #${PR_NUMBER} approved successfully."
