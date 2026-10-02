@@ -316,6 +316,16 @@ run_footer() {
   printf '\n---\nrun-id: %s · artifacts: %s\n' "${RUN_ID}" "${RUN_DIR:-<none>}"
 }
 
+# _run_iso_epoch <iso> — portable ISO-8601 parser for GNU and BSD date.
+_run_iso_epoch() {
+  local iso="$1" epoch=""
+  epoch="$(date -u -d "$iso" +%s 2>/dev/null || true)"
+  if [[ ! "$epoch" =~ ^[0-9]+$ ]]; then
+    epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$iso" +%s 2>/dev/null || true)"
+  fi
+  [[ "$epoch" =~ ^[0-9]+$ ]] && printf '%s\n' "$epoch"
+}
+
 # run_prune [days] [issue] — remove wrapper-run-id dirs older than `days`
 # (default 30). Only dirs matching the wrapper-run-id glob are candidates, so
 # #233's bare-UUID per-agent dirs are never touched. The ACTIVE run-id (current
@@ -357,7 +367,7 @@ run_prune() {
     if [[ -f "$d/meta.json" ]] && command -v jq >/dev/null 2>&1; then
       started_iso="$(jq -r '.started_at // empty' "$d/meta.json" 2>/dev/null)" || started_iso=""
       if [[ -n "$started_iso" ]]; then
-        started_epoch="$(date -u -d "$started_iso" +%s 2>/dev/null || echo '')"
+        started_epoch="$(_run_iso_epoch "$started_iso" 2>/dev/null || echo '')"
       fi
     fi
     if [[ -z "$started_epoch" ]]; then
