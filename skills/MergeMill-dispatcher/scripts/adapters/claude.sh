@@ -26,8 +26,9 @@ adapter_invoke_claude() {
 
   # Flag list is identical across both invocation paths — only the
   # command prefix differs (see below). `-p` is the headless flag;
-  # claude reads the prompt from stdin when -p has no value. --name is
-  # omitted on resume — the session retains the name set at creation.
+  # claude reads the prompt from stdin when -p has no value. Session labels
+  # are tracked by MergeMill's run metadata; current Claude CLI releases do
+  # not support a `--name` option.
   local claude_args
   if [[ "$mode" == "dev-resume" ]]; then
     claude_args=(
@@ -41,7 +42,6 @@ adapter_invoke_claude() {
   else
     claude_args=(
       --session-id "$session_id"
-      ${session_name:+--name "$session_name"}
       --permission-mode "$AGENT_PERMISSION_MODE"
       ${model:+--model "$model"}
       "${extra_args[@]}"
