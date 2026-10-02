@@ -231,6 +231,10 @@ fi
 # lib-config.sh::load_MergeMill_conf which re-sources MergeMill.conf,
 # and conf's unconditional `AGENT_CMD="claude"` line would otherwise
 # overwrite this rebind. Same ordering is applied in MergeMill-dev.sh.
+# Keep headless review startup independent from user-level Claude plugin
+# marketplace refreshes; the adapter preserves only the user's auth/base-url
+# settings while loading project hooks normally.
+export MERGEMILL_DISABLE_CLAUDE_PLUGINS="${MERGEMILL_DISABLE_CLAUDE_PLUGINS:-1}"
 AGENT_CMD="$AGENT_REVIEW_CMD"
 # Per-side AGENT_LAUNCHER override (INV-38). Mirrors the dev-side
 # rebind in MergeMill-dev.sh. Default (operator hasn't set
