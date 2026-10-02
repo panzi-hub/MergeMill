@@ -315,6 +315,17 @@ _drops_out="$(_latest_review_drops)"
 if [[ -n "$_drops_out" ]]; then echo "$_drops_out"; else echo "  none recorded"; fi
 
 echo ""
+echo "── latest agent completion ───────────────────────────────────────"
+_latest_result=""
+if [[ -n "${RUNS_PARENT:-}" && -d "$RUNS_PARENT" ]]; then
+  _latest_result="$(find "$RUNS_PARENT" -type f -name agent-result.json -print 2>/dev/null | sort | tail -n 1)"
+fi
+if [[ -n "$_latest_result" ]] && command -v jq >/dev/null 2>&1; then
+  jq -r '"  " + (.ended_at // "") + "  " + (.cli // "") + "  mode=" + (.mode // "") + "  rc=" + ((.rc // "")|tostring) + "  session=" + (.session_id // "")' "$_latest_result" 2>/dev/null || echo "  unreadable result"
+else
+  echo "  none recorded"
+fi
+
 echo "── last state transition event ───────────────────────────────────"
 _EVENT_FILE="${MERGEMILL_STATE_DIR:-${HOME:-/tmp}/.local/state/MergeMill-${PROJECT_ID:-unknown}}/state-events/issue-${ISSUE_NUMBER}.jsonl"
 if [[ -s "$_EVENT_FILE" ]] && command -v jq >/dev/null 2>&1; then
