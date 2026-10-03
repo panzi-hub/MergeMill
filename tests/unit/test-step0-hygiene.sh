@@ -67,7 +67,11 @@ gh() {
             fi
             i=$((i + 1))
           done
-          if [[ -n "$q" ]]; then
+          # The hygiene regression requires an all-state, unlabelled query;
+          # return no rows for the old open/MergeMill query shape.
+          if [[ "$*" != *"--state all"* || "$*" == *"--label MergeMill"* ]]; then
+            printf '[]'
+          elif [[ -n "$q" ]]; then
             jq "$q" <<<"${_MOCK_ISSUE_LIST:-[]}"
           else
             printf '%s' "${_MOCK_ISSUE_LIST:-[]}"
@@ -165,6 +169,18 @@ mklabels_json() {
   out+="]"
   printf '%s' "$out"
 }
+
+# ===================================================================
+# list_hygiene_residue scope
+# ===================================================================
+echo "=== TC-HYG-LIST: closed issues without MergeMill are scanned ==="
+
+_GH_CALLS=()
+_MOCK_ISSUE_LIST='[{"number":107,"title":"closed residue","labels":[{"name":"approved"},{"name":"pending-review"}],"assignees":[],"comments":[]}]'
+residue=$(list_hygiene_residue)
+assert_eq "TC-HYG-LIST-001 finds closed terminal residue" "1" "$(jq 'length' <<<"$residue")"
+assert_eq "TC-HYG-LIST-002 returns the closed residue only for all-state unlabelled scan" "107" "$(jq -r '.[0].number' <<<"$residue")"
+_MOCK_ISSUE_LIST=""
 
 # ===================================================================
 # _has_terminal_label

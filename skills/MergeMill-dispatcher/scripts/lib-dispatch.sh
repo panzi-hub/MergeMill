@@ -264,11 +264,16 @@ list_hygiene_residue() {
   # contract: the 2-axis (terminal AND transitional) [INV-25] forbidden-combo
   # predicate MOVED INTO THE LEAF (spec R1's one deliberate exception to
   # "predicates stay caller-side") — this caller is now a thin pass-through.
+  # Hygiene must scan ALL states and must not require the MergeMill baseline
+  # label. GitHub closes an issue automatically when a linked PR merges, and
+  # the close operation can remove that baseline before the next tick. The
+  # terminal labels still make the residue identifiable, so filtering to
+  # open/MergeMill would permanently strand pending-review or pending-dev.
   # [#436, ISSUE_FILTER, design §6/§7] the leaf always returns `assignees`
   # (this verb takes no FIELDS_CSV, PR-A's unconditional widening) so
   # `issue_filter_apply` can see assignee data too — per-slice Step-0
   # hygiene, the INV-25 scope amendment.
-  itp_list_forbidden_combos open "MergeMill" "${ISSUE_SCAN_LIMIT:-100}" | issue_filter_apply
+  itp_list_forbidden_combos all "" "${ISSUE_SCAN_LIMIT:-100}" | issue_filter_apply
 }
 
 # Strip transitional labels from an issue that also carries a terminal

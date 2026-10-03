@@ -191,6 +191,28 @@ assert_contains "stub saw token from file" "GH_TOKEN=ghs_test_token_abc" "$recor
 
 # ---------------------------------------------------------------------------
 echo ""
+echo "=== TC-RG-007: multiple wrapper aliases are skipped without recursion ==="
+# ---------------------------------------------------------------------------
+# setup_github_auth can put a per-run /tmp wrapper and the shared project
+# scripts/gh alias in PATH at the same time. The real binary lookup must skip
+# both aliases rather than alternating between them forever.
+WRAPPER_PATH_A="$TMPROOT/wrapper-a"
+WRAPPER_PATH_B="$TMPROOT/wrapper-b"
+mkdir -p "$WRAPPER_PATH_A" "$WRAPPER_PATH_B"
+ln -s "$WRAPPER" "$WRAPPER_PATH_A/gh"
+ln -s "$WRAPPER" "$WRAPPER_PATH_B/gh"
+RECORD="$TMPROOT/rec-007"
+: > "$RECORD"
+out=$(env -i HOME="$HOME" \
+  PATH="$WRAPPER_PATH_A:$WRAPPER_PATH_B:$PATH_DIR:/opt/homebrew/bin:/usr/bin:/bin" \
+  STUB_RECORD="$RECORD" \
+  timeout 5 bash "$WRAPPER_PATH_A/gh" status 2>&1)
+rc=$?
+assert_eq "rc=0 — wrapper aliases do not recurse" 0 "$rc"
+assert_contains "real gh stub was reached" "STUB_GH=pathdir" "$(cat "$RECORD")"
+
+# ---------------------------------------------------------------------------
+echo ""
 echo "=== Summary ==="
 echo "  PASS: $PASS"
 echo "  FAIL: $FAIL"
