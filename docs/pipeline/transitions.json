@@ -75,6 +75,19 @@
       "note": "Covers exit 0 with no PR, non-zero exit, and the startup-failure early-return path."
     },
     {
+      "id": "dev-terminal-cleanup",
+      "from": "in_progress",
+      "to": "end",
+      "event": "dev-wrapper-terminal-state-cleanup",
+      "actor": "dev-wrapper-trap",
+      "guards": ["dev-terminal-complete"],
+      "actions": ["remove-label:approved", "remove-label:in-progress", "remove-label:pending-dev", "remove-label:pending-review", "comment:dev-terminal-cleanup"],
+      "code_site": "MergeMill-dev.sh cleanup(): terminal state always wins over PR/exit routing",
+      "mermaid": "in_progress --> [*]: Dev wrapper terminal-state cleanup (issue closed or linked PR merged)",
+      "inv_refs": ["INV-08"],
+      "note": "Terminal state wins before exit-code or open-PR routing; cleanup removes stale transitional labels and never adds a retry label."
+    },
+    {
       "id": "dispatch-5a-alive-pr-ready",
       "from": "in_progress",
       "to": "pending_review",
