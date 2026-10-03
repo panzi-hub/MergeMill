@@ -83,13 +83,13 @@ run_trace() {
 }
 
 # TC-CHP-CI — chp_ci_status now owns the FULL argv (#399 W1d): the leaf emits
-# `gh pr checks PR --repo $REPO --json state`; the per-check-state → single-
-# token projection lives INSIDE the leaf, so the caller passes only the PR.
+# `gh pr checks PR --repo $REPO --json name,state`; the per-check-record →
+# single-token projection lives INSIDE the leaf, so the caller passes only the PR.
 # The `-q '[.[].state]'` tail the pre-#399 caller supplied is GONE from the
 # seam — the token normalization is the whole point of W1d.
 argv=$(run_trace chp_ci_status 42)
 assert_eq "TC-CHP-CI chp_ci_status emits gh pr checks argv (W1d normalized-token leaf)" \
-  "pr checks 42 --repo $REPO --json state " "$argv"
+  "pr checks 42 --repo $REPO --json name,state " "$argv"
 
 # TC-CHP-FINDPR — chp_find_pr_for_issue's ABSTRACT contract (W1c1 #397): the
 # leaf emits `gh api graphql -F owner=… -F repo=… -f query=…` with a cursor

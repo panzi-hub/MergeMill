@@ -256,6 +256,29 @@ while IFS= read -r row; do
 done < <(jq -r 'to_entries[] | "\(.key)|\(.value.gh_stdout)|\(.value.gh_rc)|\(.value.new_token)|\(.value.new_ci_is_green_rc)|\(.value.old_ci_is_green_rc)"' "$CI_GOLDEN")
 
 echo
+echo "=== TC-W1D-ADVISORY-SKIP: only the label-gated live-smoke skip is non-blocking ==="
+
+_drive_named_ci() {
+  local gh_stdout="$1" gh_rc="$2"
+  env -u PROJECT_DIR -u MERGEMILL_CONF -u MERGEMILL_CONF_DIR \
+      REPO=o/r REPO_OWNER=o PROJECT_ID=w1d-parity \
+      _W1D_GH_STDOUT="$gh_stdout" _W1D_GH_RC="$gh_rc" \
+      _W1D_LIB_DISPATCH="$_LIB_DISPATCH" \
+  bash -c '
+    gh() { printf "%s" "$_W1D_GH_STDOUT"; return "$_W1D_GH_RC"; }
+    source "$_W1D_LIB_DISPATCH" >/dev/null 2>&1
+    if ci_is_green 42; then echo 0; else echo $?; fi
+  '
+}
+
+assert_eq "TC-W1D-ADVISORY-SKIP-001 named live-smoke SKIPPED is non-blocking" \
+  "0" "$(_drive_named_ci '[{"name":"Hermetic / Unit + conformance","state":"SUCCESS"},{"name":"Live agent-smoke (self-hosted, label-gated)","state":"SKIPPED"}]' 0)"
+assert_eq "TC-W1D-ADVISORY-SKIP-002 unrelated SKIPPED remains blocking" \
+  "1" "$(_drive_named_ci '[{"name":"Hermetic / Unit + conformance","state":"SUCCESS"},{"name":"unrelated optional check","state":"SKIPPED"}]' 0)"
+assert_eq "TC-W1D-ADVISORY-SKIP-003 live-smoke FAILURE remains blocking" \
+  "1" "$(_drive_named_ci '[{"name":"Hermetic / Unit + conformance","state":"SUCCESS"},{"name":"Live agent-smoke (self-hosted, label-gated)","state":"FAILURE"}]' 1)"
+
+echo
 echo "=== TC-W1D-ARGV-SRC: no --json / -q on chp_ci_status / chp_mergeable caller lines outside providers/ (AC2) ==="
 
 # AC2 secondary guard: grep the CALLER-layer files (everything under

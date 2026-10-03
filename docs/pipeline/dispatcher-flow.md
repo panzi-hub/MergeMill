@@ -197,7 +197,7 @@ operator was the bug closed by #91.
 
 Implementation: `lib-dispatch.sh::run_hygiene_pass`, `list_hygiene_residue`, `hygiene_strip_residual_labels`, `hygiene_post_audit_comment`, `_has_terminal_label`.
 
-Find MergeMill issues whose label set violates the state-machine "Forbidden transitions" rules — i.e. an issue carries a sticky terminal label (`approved` or `stalled`) AND any transitional label (`in-progress`, `reviewing`, `pending-review`, `pending-dev`).
+Find issues in **all states**, without requiring the `MergeMill` baseline label, whose label set violates the state-machine "Forbidden transitions" rules — i.e. an issue carries a sticky terminal label (`approved` or `stalled`) AND any transitional label (`in-progress`, `reviewing`, `pending-review`, `pending-dev`). GitHub automatically closes an issue when its linked PR merges, and that close operation can remove the baseline label before the next tick; scanning the full issue set prevents terminal residue from becoming stranded.
 
 For each match:
 
