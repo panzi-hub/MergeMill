@@ -132,6 +132,12 @@ for b in claude codex gemini kiro-cli opencode agy frobnik; do
   { printf '#!/bin/bash\n'; printf 'SELFBIN=%q\n' "$b"; cat <<'BODY'
 if [[ "$SELFBIN" == "agy" && "$1" == "models" ]]; then exit 0; fi
 { printf 'BIN=%s argv:' "$SELFBIN"; printf ' %q' "$@"; printf '\n'; } >> "$REC"
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == "--settings" && $((i + 1)) -lt ${#args[@]} ]]; then
+    cat "${args[$((i + 1))]}" > "$REC.settings" 2>/dev/null || true
+  fi
+done
 exit 0
 BODY
   } > "$TMPG/bin/$b"; chmod +x "$TMPG/bin/$b"
@@ -155,6 +161,7 @@ run_dispatch() {
   bash -c '
     unset AGENT_PID_FILE
     source "'"$LIB"'" 2>/dev/null
+    AGENT_CMD="'"$cli"'"; AGENT_DEV_CMD="$AGENT_CMD"; AGENT_REVIEW_CMD="$AGENT_CMD"
     '"$fn"' "11111111-2222-3333-4444-555555555555" "PROMPT" "m" "nm" >/dev/null 2>&1 || true
   '
 }
@@ -210,9 +217,35 @@ env -u MERGEMILL_CONF -u MERGEMILL_CONF_DIR PATH="$TMPG/bin:$PATH" REC="$REC" \
     AGENT_CMD=agy AGENT_TIMEOUT="4h" AGENT_DEV_EXTRA_ARGS="" AGENT_LAUNCHER="" \
     PROJECT_ID="adtest" REPO="t/r" PROJECT_DIR="$TMPG" \
   bash -c 'unset AGENT_PID_FILE; source "'"$LIB"'" 2>/dev/null
+    AGENT_CMD=agy; AGENT_DEV_CMD=agy; AGENT_REVIEW_CMD=agy
     run_agent "11111111-2222-3333-4444-555555555555" "P" "claude-sonnet-4.6" "nm" >/dev/null 2>&1 || true' 2>/dev/null
 assert_not_contains "TC-030 agy omits an unknown --model (INV-50 validation in adapter)" \
   '--model' "$(cat "$REC")"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== TC-ADAPTER-EXTRACT-060: headless Claude settings isolation ==="
+# Automation must not load user plugin/marketplace settings. It keeps only the
+# user's env block (auth/base URL) while explicitly retaining project/local
+# settings so MergeMill's project hooks remain active.
+ISO_HOME=$(mktemp -d)
+mkdir -p "$ISO_HOME/.claude"
+printf '%s\n' '{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid"},"enabledPlugins":{"unwanted@marketplace":true}}' > "$ISO_HOME/.claude/settings.json"
+REC="$TMPG/rec-claude-isolated"; : > "$REC"
+env -u MERGEMILL_CONF -u MERGEMILL_CONF_DIR \
+    HOME="$ISO_HOME" MERGEMILL_DISABLE_CLAUDE_PLUGINS=1 \
+    PATH="$TMPG/bin:$PATH" REC="$REC" \
+    MERGEMILL_PID_DIR="$TMPG/state" AGENT_CMD=claude AGENT_PERMISSION_MODE=auto \
+    AGENT_TIMEOUT="4h" AGENT_DEV_EXTRA_ARGS="" AGENT_REVIEW_EXTRA_ARGS="" \
+    AGENT_LAUNCHER="" PROJECT_ID=adtest REPO=t/r PROJECT_DIR="$TMPG" \
+  bash -c 'unset AGENT_PID_FILE; source "'"$LIB"'" 2>/dev/null
+    run_agent "11111111-2222-3333-4444-555555555555" "P" "m" "nm" >/dev/null 2>&1 || true'
+claude_iso_argv=$(cat "$REC")
+assert_contains "TC-060 Claude isolation selects project/local settings" '--setting-sources project' "$claude_iso_argv"
+assert_contains "TC-060 Claude isolation passes a temporary settings file" '--settings' "$claude_iso_argv"
+assert_contains "TC-060 isolated settings preserve env" 'ANTHROPIC_BASE_URL' "$(cat "$REC.settings" 2>/dev/null || true)"
+assert_not_contains "TC-060 isolated settings omit plugin configuration" 'enabledPlugins' "$(cat "$REC.settings" 2>/dev/null || true)"
+rm -rf "$ISO_HOME"
 
 echo ""
 echo "=== SUMMARY: $PASS passed, $FAIL failed ==="
