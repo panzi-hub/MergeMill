@@ -167,6 +167,11 @@ calls the **real predicate functions** — no reimplementation:
 rather than duplicate their logic. Drift here would be a *new* false-signal
 source — worse than no tool (issue Design Considerations).
 
+> Issue #12 extends this tool with `--all` (fleet view), `--issue <n>` (explicit
+> selector), and `--json` (stable machine-readable object) — see
+> [`status-dashboard.md`](status-dashboard.md). The single-issue report only
+> gains additive lines; every existing line is preserved.
+
 ### Four canonical states `status.sh` must answer
 
 1. **idle** — no in-progress/reviewing label, no live PID → "next tick: dev-new if pending-dev".

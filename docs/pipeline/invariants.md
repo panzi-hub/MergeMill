@@ -4238,6 +4238,31 @@ It NEVER reimplements them — a divergent answer would be a NEW false-signal so
 worse than no tool. `status.sh` is strictly **read-only**: it issues no
 `gh issue edit`, no `gh pr merge`, no `gh * comment`.
 
+**Fleet + machine-readable surface (issue #12).** `status.sh` additionally accepts
+`--issue <n>` (an explicit alias of the positional form — byte-identical output),
+`--all` (enumerate every OPEN `MergeMill`-labelled issue via the SAME
+`itp_list_by_state` contract the Step-2 scan uses, one compact block per issue),
+and `--json` (a stable `schema_version:1` object; with `--all`, a
+`{schema_version, project, repo, generated_at, issues:[…]}` envelope). The JSON
+field set is fixed and always present — `issue`, `title`, `issue_state`, `project`,
+`repo`, `status_label`, `labels`, `agent` (dev|review|unknown), `run_id`, `attempt`,
+`last_result` (`{run_id, rc, outcome, failure_class, session_id, ended_at}` or
+`null`), `pr` (`{number, state, review_decision, mergeable}` or `null`), `retries`,
+`max_retries`, `stale` (`{dev_pid, dev_pid_alive, review_pid, review_pid_alive,
+stale_pid, stale_run, heartbeat_stale}`), `next_action`, and `diagnostics[]`. Any
+fact that cannot be determined degrades to `null` (JSON) / `unknown` (text) **plus**
+a `diagnostics` entry rather than aborting: a missing run dir, a corrupt
+`agent-result.json`, a PR that does not exist, and stale/expired PID + heartbeat
+files are all tolerated. Staleness is reported, not repaired — `stale_pid` is a PID
+file whose process is dead (`pid_alive` false), `heartbeat_stale` a `.heartbeat`
+older than `3 × HEARTBEAT_INTERVAL_SECONDS`, and `stale_run` the newest run dir with
+no `ended_at` marker older than `STATUS_STALE_RUN_SECONDS` (default 3600). The
+`agent-result.json` read is scoped to THIS issue's run dirs (the `-<issue>-dev-`/
+`-<issue>-review-` path delimiters), so a sibling issue's newer result can never
+masquerade as this one's. Secrets are never included — only operational fields.
+Exit codes are `0` ok, `2` usage, `3` missing dependency, `4` enumeration failed,
+`5` named issue not found.
+
 **Observe-only contract**: every `lib-run-artifacts.sh` function is best-effort —
 a failure (unwritable XDG base, missing jq, missing PROJECT_ID) is a silent no-op
 that leaves `RUN_ID`/`RUN_DIR` empty and degrades the footer/threading to no-ops.
@@ -4260,6 +4285,10 @@ footer + `status.sh`); the metrics aggregator (run-id is an additive field).
 minting/uniqueness, init/finalize, footer, prune age-boundary + never-active +
 INV-78 UUID untouched), `tests/unit/test-status.sh` (TC-RUN-ARTIFACTS-040..051 —
 four canonical states, read-only contract, predicate-parity grep-assert),
+`tests/unit/test-status-dashboard.sh` (TC-STATUS-DASH-001..021 — issue #12:
+`--issue`/`--all`/`--json`, normal/failed/stale/missing-result/no-PR fixtures,
+cross-side newest-`last_result` ordering, tolerance for a corrupt
+`agent-result.json`, read-only + no-secret assertions),
 `tests/e2e/run-run-artifacts-e2e.sh` (TC-RUN-ARTIFACTS-080..085 — stub dev+review
 cycle, status.sh snapshot, reboot simulation, footer→dir round-trip).
 
