@@ -145,6 +145,15 @@ found. Secrets are never included.
 | `pending-dev`, retry `≥ MAX_RETRIES` | retry budget spent | Step 4 marks `stalled` — operator must intervene |
 | `approved` + `no-auto-close` | review passed, merge gated | none — operator merges manually |
 
+### Terminal-state cleanup
+
+A development wrapper may finish after another process has closed the issue or
+merged its linked PR. Cleanup checks that terminal state before routing by exit
+code or open-PR presence. A terminal issue never receives `pending-dev` or
+`pending-review`; any stale pipeline labels are removed instead. This prevents
+a completed issue from being redispatched merely because the finishing run did
+not create a new PR.
+
 ## 4. Cross-host note
 
 The dispatcher (Tokyo) and the wrapper-execution box (Singapore) are different

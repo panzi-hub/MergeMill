@@ -23,6 +23,7 @@
     "hygiene-strip-residue-stalled":         {"file": "lib-dispatch.sh",     "anchor": "hygiene_strip_residual_labels()"},
     "dev-trap-success-pr":                   {"file": "MergeMill-dev.sh",   "anchor": "PR found: move to pending-review for the review agent"},
     "dev-trap-noprorfail":                   {"file": "MergeMill-dev.sh",   "anchor": "cleanup()"},
+    "dev-terminal-cleanup":                  {"file": "MergeMill-dev.sh",   "anchor": "Terminal state always wins over PR/exit routing"},
     "review-pass-merged":                    {"file": "MergeMill-review.sh", "anchor": "never close the issue directly"},
     "review-pass-no-auto-close":             {"file": "MergeMill-review.sh", "anchor": "no-auto-close"},
     "review-pass-approval-failed":           {"file": "MergeMill-review.sh", "anchor": "gh pr review"},
@@ -42,6 +43,7 @@
   "sites": [
     {"file": "MergeMill-dev.sh",   "movement": "in-progress|pending-dev",                                "anchor": "Failed to update issue labels on startup failure"},
     {"file": "MergeMill-dev.sh",   "movement": "in-progress,pending-dev|pending-review",                 "anchor": "PR found: move to pending-review for the review agent"},
+    {"file": "MergeMill-dev.sh",   "movement": "approved,in-progress,pending-dev,pending-review|",       "anchor": "Terminal state always wins over PR/exit routing"},
     {"file": "MergeMill-dev.sh",   "movement": "in-progress|pending-dev",                                "anchor": "no PR was created — retry development"},
     {"file": "MergeMill-dev.sh",   "movement": "in-progress|pending-dev",                                "anchor": "Failure: move back to pending-dev so dispatcher can retry"},
     {"file": "lib-dispatch.sh",     "movement": "pending-dev|stalled",                                    "anchor": "Issue has exceeded the maximum retry limit"},
