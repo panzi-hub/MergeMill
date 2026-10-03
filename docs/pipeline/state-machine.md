@@ -36,6 +36,7 @@ stateDiagram-v2
 MergeMill --> in_progress: Dispatcher Step 2 scan-new (deps resolved)
 in_progress --> pending_review: Dev wrapper trap (exit 0, PR exists)
 in_progress --> pending_dev: Dev wrapper trap (exit 0 no PR, or exit non-zero)
+in_progress --> [*]: Dev wrapper terminal-state cleanup (issue closed or linked PR merged)
 in_progress --> pending_review: Dispatcher Step 5a (ALIVE+PR ready, idle 5min, CI green) and wrapper trap converge (INV-15 PR-6)
 in_progress --> pending_dev: Step 5a SIGTERM with no PR (operator kill / orphan)
 in_progress --> pending_review: Dispatcher Step 5b (DEAD+PR, new commits)
