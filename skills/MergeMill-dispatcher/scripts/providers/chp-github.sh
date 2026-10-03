@@ -325,21 +325,23 @@ chp_github_find_pr_for_issue() {
 
 # chp_github_ci_status PR — normalized CI-status token (#399 W1d, [INV-87]).
 #
-# Spec §3.2: the leaf owns the FULL `gh pr checks` argv AND the per-check-state
-# → single-token projection; the caller's old `--json state -q '[.[].state]'`
-# tail + the `length>0 and all(.=="SUCCESS")` gate move HERE. Stdout is exactly
-# one of `green|pending|failed|none`, derived by this decision order over the
-# per-check state multiset (every `gh pr checks` state token is bucketed):
+# Spec §3.2: the leaf owns the FULL `gh pr checks --json name,state` argv AND
+# the per-check-record → single-token projection; the caller's old `-q
+# '[.[].state]'` tail + the `length>0 and all(.=="SUCCESS")` gate move HERE.
+# Stdout is exactly one of `green|pending|failed|none`, derived by this
+# decision order over the per-check record multiset:
 #
 #   (1) zero checks                              → `none`
 #   (2) any ∈ {FAILURE,ERROR,CANCELLED,TIMED_OUT} → `failed`
-#   (3) any ∈ {PENDING,QUEUED,IN_PROGRESS,EXPECTED,SKIPPED} or any state not
+#   (3) any ∈ {PENDING,QUEUED,IN_PROGRESS,EXPECTED} or any state not
 #       otherwise listed                          → `pending`
-#   (4) else (all SUCCESS, ≥1)                    → `green`
+#   (4) an explicitly advisory, label-gated live-smoke check may be SKIPPED
+#       without blocking; all other checks SUCCESS → `green`
 #
-# Rule 2 beats rule 3 (a FAILURE+SKIPPED set is `failed`); SKIPPED deliberately
-# lands in `pending` — a `SKIPPED` check is NOT a `SUCCESS`, and the old gate
-# was `all(=="SUCCESS")` so a skipped-mix was already not-green.
+# Rule 2 beats rule 3 (a FAILURE+SKIPPED set is `failed`). SKIPPED is normally
+# not SUCCESS and remains `pending`; the one exception is the deliberately
+# advisory, label-gated live-smoke job, which is expected to be SKIPPED on
+# ordinary PRs and is not a merge-required check.
 #
 # gh rc-quirk (R2): `gh pr checks` exits non-zero for failing/pending/no-checks
 # cases even when the JSON payload is well-formed. The leaf inspects stdout —
@@ -350,17 +352,18 @@ chp_github_find_pr_for_issue() {
 # existing mktemp/stderr-capture transport-failure path (TC-DSAP-014/015).
 chp_github_ci_status() {
   local pr="$1"
-  local raw gh_err states token
+  local raw gh_err checks token
+  local advisory_skipped_check='Live agent-smoke (self-hosted, label-gated)'
   # Capture stderr to a scratch file so we can (a) discard it when the payload
   # is parseable JSON (gh's rc-quirk emits noise on stderr even for a valid
   # payload) and (b) forward it to OUR stderr when the payload is not
   # parseable (genuine transport failure — the caller's mktemp/WARN path
   # TC-DSAP-014/015 pins the WARN wording that surfaces the diagnostic).
   gh_err="$(mktemp)"
-  raw="$(gh pr checks "$pr" --repo "$REPO" --json state 2>"$gh_err" || true)"
+  raw="$(gh pr checks "$pr" --repo "$REPO" --json name,state 2>"$gh_err" || true)"
   # Empty stdout is UNCONDITIONALLY a transport failure — jq on empty input
   # returns rc 0 with no output, which would otherwise fall through the rest
-  # of the pipeline as empty `states=""` / empty `token=""` and echo "" at
+  # of the pipeline as empty `checks=""` / empty `token=""` and echo "" at
   # rc 0 (the P2-3 fail-open latch the conformance runner's strict
   # fail-closed pin catches). Reject empty raw stdout first.
   if [[ -z "$raw" ]]; then
@@ -383,22 +386,26 @@ chp_github_ci_status() {
     rm -f "$gh_err"
     return 1
   }
-  states="$(printf '%s' "$raw" | jq -er '[.[].state]' 2>/dev/null)" || {
+  checks="$(printf '%s' "$raw" | jq -er 'map({name:(.name // ""), state:(.state // "")})' 2>/dev/null)" || {
     # No parseable JSON on stdout → forward gh's own error and return non-zero.
     [ -s "$gh_err" ] && cat "$gh_err" >&2
     rm -f "$gh_err"
     return 1
   }
   rm -f "$gh_err"
-  # Bucket the state multiset per the R1 decision order. jq owns the mapping;
-  # no per-token bash iteration.
-  token="$(jq -r '
-    if length == 0 then "none"
-    elif any(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT") then "failed"
-    elif all(. == "SUCCESS") then "green"
-    else "pending"
-    end
-  ' <<<"$states" 2>/dev/null)" || return 1
+  # Bucket the check records per the R1 decision order. Only the explicitly
+  # named advisory live-smoke check may have SKIPPED normalized to SUCCESS.
+  # Keeping every record in the multiset means a failure in that job still
+  # remains visible, while an unrelated skipped/unknown check stays pending.
+  token="$(jq -r --arg advisory "$advisory_skipped_check" '
+    map(if .name == $advisory and .state == "SKIPPED"
+        then .state = "SUCCESS" else . end) as $normalized
+    | if ($normalized | length) == 0 then "none"
+      elif any($normalized[]; .state == "FAILURE" or .state == "ERROR" or .state == "CANCELLED" or .state == "TIMED_OUT") then "failed"
+      elif any($normalized[]; .state != "SUCCESS") then "pending"
+      else "green"
+      end
+  ' <<<"$checks" 2>/dev/null)" || return 1
   # Belt-and-suspenders: an empty token would slip past the "" gate under an
   # unforeseen jq quirk. Empty token = fail-closed, rc≠0.
   [[ -n "$token" ]] || return 1
