@@ -698,7 +698,13 @@ if [[ "$ALL_MODE" == "true" ]]; then
     echo "Error: issue enumeration returned non-array JSON." >&2
     exit 4
   fi
-  mapfile -t _NUMS < <(jq -r '.[].number' <<<"$_ALL_JSON" 2>/dev/null | sort -n)
+  # Read the sorted issue numbers into an array with a portable `while read`
+  # loop rather than `mapfile` — macOS ships bash 3.2 as /bin/bash, where
+  # `mapfile` (bash 4+) is undefined and would silently drop the whole list.
+  _NUMS=()
+  while IFS= read -r _n; do
+    [[ -n "$_n" ]] && _NUMS+=("$_n")
+  done < <(jq -r '.[].number' <<<"$_ALL_JSON" 2>/dev/null | sort -n)
 
   if [[ "$JSON_MODE" == "true" ]]; then
     _OBJS=()
