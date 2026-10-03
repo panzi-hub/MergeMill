@@ -121,10 +121,9 @@ for _req in REPO REPO_OWNER PROJECT_ID; do
   fi
 done
 
-for _dep in gh jq; do
-  command -v "$_dep" >/dev/null 2>&1 || {
-    echo "Error: required dependency '${_dep}' not found on PATH." >&2; exit 3; }
-done
+# Provider leaves own host-I/O dependencies; the dashboard only requires jq.
+command -v jq >/dev/null 2>&1 || {
+  echo "Error: required dependency 'jq' not found on PATH." >&2; exit 3; }
 
 # shellcheck source=lib-run-artifacts.sh
 source "${LIB_DIR}/lib-run-artifacts.sh" 2>/dev/null || true
@@ -691,7 +690,7 @@ if [[ "$ALL_MODE" == "true" ]]; then
   # per-instance ISSUE_FILTER slice — so `--all` shows exactly the issues THIS
   # dispatcher instance would act on, not every MergeMill issue on the repo.
   if ! _ALL_JSON="$(itp_list_by_state open "MergeMill" "${ISSUE_SCAN_LIMIT:-100}" "$(issue_filter_fields "number,labels,title")" | issue_filter_apply 2>/dev/null)"; then
-    echo "Error: failed to enumerate MergeMill issues (provider ${ISSUE_PROVIDER:-unknown}); check REPO, gh auth, and ISSUE_FILTER." >&2
+    echo "Error: failed to enumerate MergeMill issues (provider ${ISSUE_PROVIDER:-unknown}); check REPO, provider authentication, and ISSUE_FILTER." >&2
     exit 4
   fi
   if ! jq -e 'type=="array"' >/dev/null 2>&1 <<<"${_ALL_JSON:-}"; then
@@ -742,7 +741,7 @@ fi
 # Single-issue mode.
 _collect_issue "$ISSUE_NUMBER"
 if [[ "$ISSUE_FOUND" != "true" ]]; then
-  echo "Error: issue #${ISSUE_NUMBER} not found or unreadable — check REPO/PROJECT_ID and gh auth." >&2
+  echo "Error: issue #${ISSUE_NUMBER} not found or unreadable — check REPO/PROJECT_ID and provider authentication." >&2
   exit 5
 fi
 if [[ "$JSON_MODE" == "true" ]]; then
