@@ -87,6 +87,10 @@ source "${LIB_DIR}/lib-lane.sh" 2>/dev/null || true
 source "${LIB_DIR}/lib-issue-provider.sh"
 # Failure taxonomy is used when writing the normalized agent result.
 source "${LIB_DIR}/lib-failure-class.sh"
+# Headless runs should not refresh user-level Claude plugin marketplaces during
+# tool pre-flight. The adapter preserves auth/base-url settings in a temporary
+# file while loading project hooks normally.
+export MERGEMILL_DISABLE_CLAUDE_PLUGINS="${MERGEMILL_DISABLE_CLAUDE_PLUGINS:-1}"
 # Per-side AGENT_CMD override (INV-37). Empty-string fallback already
 # applied inside lib-agent.sh; this just rebinds AGENT_CMD so the case
 # statements in run_agent / resume_agent dispatch to the dev-side CLI.

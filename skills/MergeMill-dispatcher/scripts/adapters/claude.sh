@@ -24,6 +24,27 @@ adapter_invoke_claude() {
     _parse_extra_args AGENT_DEV_EXTRA_ARGS extra_args
   fi
 
+  # Headless dispatcher runs must not inherit user-level Claude plugin
+  # marketplaces. Claude may refresh an enabled/known marketplace before the
+  # first tool call, which can leave a long-running Agent stuck in pre-flight
+  # while cloning a remote repository. Preserve only the user's env settings
+  # (auth/base URL/model) in a temporary settings file, while loading project
+  # hooks and local settings normally. Conformance runs leave this opt-in off.
+  local isolated_settings_file=""
+  local isolated_settings_args=()
+  if [[ "${MERGEMILL_DISABLE_CLAUDE_PLUGINS:-0}" == "1" ]]; then
+    isolated_settings_args+=(--setting-sources project,local)
+    if [[ -f "${HOME:-}/.claude/settings.json" ]] && command -v jq >/dev/null 2>&1; then
+      isolated_settings_file="$(mktemp "${TMPDIR:-/tmp}/mergemill-claude-settings.XXXXXX")"
+      if jq '{env: (.env // {})}' "${HOME}/.claude/settings.json" >"${isolated_settings_file}"; then
+        isolated_settings_args+=(--settings "$isolated_settings_file")
+      else
+        rm -f "$isolated_settings_file"
+        isolated_settings_file=""
+      fi
+    fi
+  fi
+
   # Flag list is identical across both invocation paths — only the
   # command prefix differs (see below). `-p` is the headless flag;
   # claude reads the prompt from stdin when -p has no value. Session labels
@@ -33,6 +54,7 @@ adapter_invoke_claude() {
   if [[ "$mode" == "dev-resume" ]]; then
     claude_args=(
       --resume "$session_id"
+      "${isolated_settings_args[@]}"
       --permission-mode "$AGENT_PERMISSION_MODE"
       ${model:+--model "$model"}
       "${extra_args[@]}"
@@ -42,6 +64,7 @@ adapter_invoke_claude() {
   else
     claude_args=(
       --session-id "$session_id"
+      "${isolated_settings_args[@]}"
       --permission-mode "$AGENT_PERMISSION_MODE"
       ${model:+--model "$model"}
       "${extra_args[@]}"
@@ -63,9 +86,12 @@ adapter_invoke_claude() {
   #     `$CLAUDE_CMD "$@"`, so we pass ONLY flags as "$@" —
   #     NOT the binary name and NOT `env -u`. CLAUDECODE handling is
   #     delegated to the launcher.
+  local rc=0
   if [[ ${#AGENT_LAUNCHER_ARGV[@]} -gt 0 ]]; then
-    printf '%s' "$prompt" | _run_with_timeout "${claude_args[@]}"
+    printf '%s' "$prompt" | _run_with_timeout "${claude_args[@]}" || rc=$?
   else
-    printf '%s' "$prompt" | _run_with_timeout env -u CLAUDECODE "$AGENT_CMD" "${claude_args[@]}"
+    printf '%s' "$prompt" | _run_with_timeout env -u CLAUDECODE "$AGENT_CMD" "${claude_args[@]}" || rc=$?
   fi
+  [[ -z "$isolated_settings_file" ]] || rm -f "$isolated_settings_file"
+  return "$rc"
 }

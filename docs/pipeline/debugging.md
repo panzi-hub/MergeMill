@@ -24,6 +24,16 @@
 
 That's it. The rest of this doc is the detail.
 
+### Claude headless startup
+
+The dev and review wrappers isolate headless Claude startup from the user's
+Claude plugin marketplaces. When `MERGEMILL_DISABLE_CLAUDE_PLUGINS=1` (the
+wrapper default), the Claude adapter loads `project,local` settings and passes
+a temporary settings file containing only the user's `env` block. This keeps
+project hooks active while preventing a user-level marketplace refresh from
+blocking the first tool call. Set the variable to `0` only when reproducing an
+interactive user configuration.
+
 ---
 
 ## 1. Comment → run-id → directory
