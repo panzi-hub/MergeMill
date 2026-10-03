@@ -154,6 +154,25 @@ code or open-PR presence. A terminal issue never receives `pending-dev` or
 a completed issue from being redispatched merely because the finishing run did
 not create a new PR.
 
+### Verifying terminal cleanup
+
+After a dev run finishes on an issue that was already closed, or whose linked
+PR was merged, confirm the cleanup from the operator side with the same
+read-only tool:
+
+```bash
+bash scripts/status.sh <issue>
+```
+
+The expected terminal result has **no `pending-dev` and no `pending-review`
+label** — the `labels:` line lists no active pipeline state, and the
+`── next dispatcher tick ──` line reports `none — issue is CLOSED (terminal).`
+Any other outcome means a stale pipeline label survived, leaving the issue at
+risk of being redispatched.
+
+`status.sh` is observe-only here as everywhere: it does not mutate labels or
+comments — no label add/remove, no comment posts, no merges.
+
 ## 4. Cross-host note
 
 The dispatcher (Tokyo) and the wrapper-execution box (Singapore) are different
