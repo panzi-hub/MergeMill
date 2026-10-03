@@ -165,10 +165,10 @@ bash scripts/status.sh <issue>
 ```
 
 The expected terminal result has **no `pending-dev` and no `pending-review`
-label** — the `labels:` line lists no active pipeline state, and the
+label** — the `labels:` line lists neither. For a closed issue the
 `── next dispatcher tick ──` line reports `none — issue is CLOSED (terminal).`
-Any other outcome means a stale pipeline label survived, leaving the issue at
-risk of being redispatched.
+If either routing label is still present, stale cleanup did not happen and the
+issue is at risk of being redispatched.
 
 `status.sh` is observe-only here as everywhere: it does not mutate labels or
 comments — no label add/remove, no comment posts, no merges.
