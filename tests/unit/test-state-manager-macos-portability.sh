@@ -13,7 +13,8 @@
 #
 # The test drives the REAL hook against a scratch git repo and an isolated
 # CLAUDE_PROJECT_DIR, emulating macOS with a BSD-`date` PATH shim + a `gdate`
-# shim that exits 127, and emulating bash 3.2 with `enable -n mapfile`.
+# shim that exits 127, and emulating bash 3.2 by disabling the `mapfile` /
+# `readarray` builtins (`enable -n`).
 #
 # Run: bash tests/unit/test-state-manager-macos-portability.sh
 
@@ -57,7 +58,8 @@ git -C "$REPO" add b.txt            # staged, uncommitted -> get_staged_files
 
 # --- BSD/macOS `date` shim -------------------------------------------------
 # Rejects `-d` (BSD has none); `-j -f <fmt> <str> +%s` parses LOCAL; `-u -j -f`
-# parses UTC. Arithmetic delegated to the real GNU date.
+# parses UTC. Epoch arithmetic is delegated to the host's real `date` (GNU `-d`
+# when available, otherwise BSD `-j -f`), so the shim works on any test host.
 cat > "$SHIM/gdate" <<'EOF'
 #!/bin/sh
 exit 127
@@ -109,10 +111,11 @@ echo "=== TC-SMP-001..002: no-mapfile path (bash 3.2 emulation) ==="
 echo ""
 
 reset_state
-# `enable -n mapfile` disables the builtin -> calling it fails, exactly as on
-# bash 3.2. Source with positional args so the hook's dispatch sees `mark`.
+# `enable -n` disables the builtins -> calling either fails, exactly as on
+# bash 3.2 (mapfile and its readarray synonym are the same bash-4+ builtin).
+# Source with positional args so the hook's dispatch sees `mark`.
 ( cd "$REPO" && CLAUDE_PROJECT_DIR="$PROJ" \
-    bash -c 'enable -n mapfile; source "$1" mark code-simplifier' _ "$STATE_MANAGER" ) \
+    bash -c 'enable -n mapfile readarray; source "$1" mark code-simplifier' _ "$STATE_MANAGER" ) \
     >/dev/null 2>&1
 rc=$?
 if [[ $rc -eq 0 ]]; then
@@ -127,13 +130,14 @@ else
   bad "TC-SMP-001 staged file list missing from state (read-loop path broken)"
 fi
 
-# Static guard: the bash-4-only builtin must not reappear. Strip comments first
-# so a prose mention ("... has no mapfile") cannot mask a real invocation.
+# Static guard: neither bash-4-only builtin may reappear (mapfile's synonym
+# readarray is equally absent in 3.2). Strip comments first so a prose mention
+# ("... has no mapfile") cannot mask a real invocation.
 if sed 's/#.*$//' "$STATE_MANAGER" \
-     | grep -qE '(^|[^A-Za-z0-9_])mapfile([^A-Za-z0-9_]|$)'; then
-  bad "TC-SMP-002 hook source still invokes mapfile (bash 3.2 incompatible)"
+     | grep -qE '(^|[^A-Za-z0-9_])(mapfile|readarray)([^A-Za-z0-9_]|$)'; then
+  bad "TC-SMP-002 hook source still invokes mapfile/readarray (bash 3.2 incompatible)"
 else
-  ok "TC-SMP-002 no mapfile invocation in hook source"
+  ok "TC-SMP-002 no mapfile/readarray invocation in hook source"
 fi
 
 echo ""
@@ -200,6 +204,32 @@ if [[ $stale_rc -ne 0 && ! -f "$STATE_FILE" ]]; then
   ok "TC-SMP-007 pr-review mark invalidated by a new HEAD (state removed)"
 else
   bad "TC-SMP-007 stale-HEAD mark expected rc!=0 + removal, got rc=$stale_rc, state_present=$([[ -f "$STATE_FILE" ]] && echo yes || echo no)"
+fi
+
+echo ""
+echo "=== TC-SMP-008: freshness still enforced on the BSD date path ==="
+echo ""
+
+# A mark older than 1800 s must expire under the same BSD shim, so the fixed
+# resolver is not accidentally treating every stamp as fresh.
+reset_state
+( cd "$REPO" && PATH="$SHIM:$PATH" TZ="$HOST_TZ" TZ_LOCAL="$HOST_TZ" CLAUDE_PROJECT_DIR="$PROJ" \
+    bash "$STATE_MANAGER" mark pr-review ) >/dev/null 2>&1
+now_epoch=$("$REAL_DATE" +%s)
+if "$REAL_DATE" -d "1970-01-01" +%s >/dev/null 2>&1; then
+  old_ts=$("$REAL_DATE" -u -d "@$((now_epoch - 7200))" +"%Y-%m-%dT%H:%M:%SZ")
+else
+  old_ts=$("$REAL_DATE" -u -r "$((now_epoch - 7200))" +"%Y-%m-%dT%H:%M:%SZ")
+fi
+sed -i.bak -E "s/\"timestamp\": \"[^\"]*\"/\"timestamp\": \"$old_ts\"/" "$STATE_FILE"
+rm -f "$STATE_FILE.bak"
+( cd "$REPO" && PATH="$SHIM:$PATH" TZ="$HOST_TZ" TZ_LOCAL="$HOST_TZ" CLAUDE_PROJECT_DIR="$PROJ" \
+    bash "$STATE_MANAGER" check pr-review ) >/dev/null 2>&1
+expired_rc=$?
+if [[ $expired_rc -ne 0 && ! -f "$STATE_FILE" ]]; then
+  ok "TC-SMP-008 stale (>1800 s) mark expires under BSD date shim (state removed)"
+else
+  bad "TC-SMP-008 stale mark expected rc!=0 + removal, got rc=$expired_rc, state_present=$([[ -f "$STATE_FILE" ]] && echo yes || echo no)"
 fi
 
 echo ""

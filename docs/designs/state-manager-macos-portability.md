@@ -23,12 +23,14 @@ symlink) is not portable to stock macOS. Two independent defects make the
   `gdate` (GNU coreutils on macOS) → GNU `date -d` → BSD `date -u -j -f`. The
   BSD fallback is fixed to parse **UTC** (`-u`) so it agrees with the UTC value
   written by `mark_action`. All paths fail closed (`echo "0"`) so a parser that
-  cannot run never yields a stale-looking-but-valid mark.
+  cannot run expires the mark (blocks) rather than accepting a stale one.
 - **File list**: replace the `mapfile` builtin with a `while IFS= read -r` loop,
-  which exists in bash 3.2.
+  which exists in bash 3.2 (and avoid its equally bash-4-only synonym
+  `readarray`).
 
-No gate is weakened: the `pr-review` mark still must be fresh (≤1800 s) **and**
-reference the current `HEAD`. No `--no-verify` or bypass is introduced.
+This change does not weaken any gate: the `pr-review` mark still must be fresh
+(≤1800 s) **and** reference the current `HEAD`. No `--no-verify` or bypass is
+introduced.
 
 ## Compatibility matrix
 
