@@ -96,6 +96,87 @@ _lane_bounded() {
 }
 
 # ---------------------------------------------------------------------------
+# [INV-125] setsid discovery — Homebrew installs util-linux KEG-ONLY.
+#
+# `setsid` is a declared hard prerequisite for the pgid lane backend
+# ([INV-109]/[INV-114]) and for the per-lane guardian sidecar ([INV-118]),
+# and [INV-23]'s documented macOS remedy is "macOS operators get setsid via
+# Homebrew". But `brew install util-linux` installs it KEG-ONLY — Homebrew
+# never links it into /opt/homebrew/bin — so `command -v setsid` keeps
+# failing on a host where util-linux IS installed. Every `command -v setsid`
+# guard in the tree then silently takes its degraded branch: no guardian, no
+# per-agent isolation, GC-only reaping. `adt-gc.sh --doctor` likewise reports
+# "[FAIL] setsid missing" on a fully-provisioned box, and the operator's only
+# clue is an ERROR line that tells them to install a package they already
+# have. (Observed on the dev box: a hung dev lane had to be reaped by
+# dispatcher Step 5 instead of by its guardian.)
+#
+# This probe runs ONCE at source time — the same source-time tool-resolution
+# posture `_LANE_TIMEOUT_CMD` above already uses — and is APPEND-ONLY. It must
+# never PREPEND: util-linux ships 24 tools (`getopt`, `column`, `uuidgen`,
+# `renice`, `logger`, `look`, `whereis`, `hexdump`, …) and putting its bin dir
+# ahead of /usr/bin would silently swap BSD for GNU variants in every script
+# that resolves those by bare name. Appending only ever makes a tool findable
+# when NO earlier PATH entry provides it, which is exactly the `setsid` case
+# (no macOS/BSD `setsid` exists to shadow).
+#
+# The prefix list is a fixed, documented set rather than a `brew --prefix`
+# call: this runs on every dispatch, including under the minimal PATH of a
+# cron/launchd GC timer where `brew` may not be on PATH at all. The three
+# entries cover Apple-silicon Homebrew, Intel Homebrew, and MacPorts.
+# Overridable via $LANE_SETSID_FALLBACK_DIRS (colon-separated) so a unit test
+# can drive the probe against fixtures instead of the host's real layout.
+_LANE_SETSID_FALLBACK_DIRS="${LANE_SETSID_FALLBACK_DIRS:-/opt/homebrew/opt/util-linux/bin:/usr/local/opt/util-linux/bin:/opt/local/bin}"
+
+# lane_ensure_setsid_path — append the first fallback dir that actually
+# contains an executable, non-directory `setsid`, unless `setsid` is already
+# resolvable.
+#
+# Idempotent (a re-source cannot duplicate the PATH entry) and never fatal.
+# Returns 0 when `setsid` resolves afterwards, 1 when it does not — the caller
+# keeps whatever degraded posture it already had, so a host with no setsid at
+# all is no worse off than before. Echoes nothing.
+lane_ensure_setsid_path() {
+  command -v setsid >/dev/null 2>&1 && return 0
+
+  local _dir _rest="$_LANE_SETSID_FALLBACK_DIRS"
+  while [[ -n "$_rest" ]]; do
+    _dir="${_rest%%:*}"
+    if [[ "$_rest" == *:* ]]; then _rest="${_rest#*:}"; else _rest=""; fi
+    [[ -n "$_dir" ]] || continue
+    # `-x` alone also accepts an executable DIRECTORY named `setsid`, which
+    # `command -v` rejects — that false positive would return 0 with setsid
+    # still unresolvable and, worse, break the idempotence proof below by
+    # letting a re-source append the same dir twice. Require a non-directory.
+    if [[ -x "$_dir/setsid" && ! -d "$_dir/setsid" ]]; then
+      # Append, never prepend (see the header above). No duplicate-entry check
+      # is needed: the `command -v` guard at the top already proved that no
+      # PATH entry provides an executable `setsid`, and this one does — so this
+      # dir cannot already be on PATH. That is also what makes a re-source
+      # idempotent (the second call short-circuits on that same guard).
+      PATH="${PATH}:${_dir}"
+      export PATH
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Source-time invocation — the single chokepoint. Both wrappers,
+# dispatch-local.sh and adt-gc.sh source this lib directly; lib-agent.sh and
+# lib-review-e2e.sh are sourced by those wrappers and inherit the normalized
+# PATH; lib-guardian.sh runs as its own `setsid`-detached process but re-sources
+# this lib itself, so it runs the probe in its own process too. Every process a
+# covered entry point later spawns — the agent CLI, fan-out and E2E subshells —
+# inherits the normalized PATH by ordinary environment inheritance, so no
+# per-spawn plumbing is needed. (dispatcher-tick.sh does NOT source this lib —
+# and contains no `command -v setsid` guard either, so it needs nothing from
+# this probe; its children, dispatch-local.sh and the wrappers, do their own
+# sourcing.) `|| true` keeps a genuinely setsid-less host on its pre-existing
+# degraded path rather than aborting the dispatch under `set -e`.
+lane_ensure_setsid_path || true
+
+# ---------------------------------------------------------------------------
 # Portability shims
 # ---------------------------------------------------------------------------
 
