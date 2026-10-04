@@ -38,19 +38,34 @@ echo "=== TC-SOT-CI-ADVISORY-NAME: chp-github.sh constant == ci.yml live-smoke j
 # subshell reads the actual assignment (not a regex over the source line), so a
 # rename/removal of the variable yields an empty read and fails loudly rather
 # than letting the equality check pass vacuously.
+#
+# `env -u` clears any inherited value before the source: the declaration is
+# guarded by `declare -p … || readonly …` (chp-github.sh), so a pre-set/
+# exported `_CHP_GITHUB_ADVISORY_SKIPPED_CHECK` would make the file's literal —
+# the real source of truth — invisible to this read (a false PASS). stderr is
+# captured rather than discarded: on an empty read it distinguishes "constant
+# absent" from "provider failed to source" instead of misreporting the latter.
+_advisory_err="$(mktemp)"
 _advisory_from_provider="$(
-  bash -c 'source "$1" && printf "%s" "$_CHP_GITHUB_ADVISORY_SKIPPED_CHECK"' _ "$CHP_GITHUB" 2>/dev/null
+  env -u _CHP_GITHUB_ADVISORY_SKIPPED_CHECK \
+    bash -c 'source "$1" && printf "%s" "$_CHP_GITHUB_ADVISORY_SKIPPED_CHECK"' _ "$CHP_GITHUB" 2>"$_advisory_err"
 )"
 
 # (2) Read the `name:` of the label-gated live-smoke job from the REAL workflow.
-# The job key is the 2-space-indented `live-smoke:`; its `name:` is the first
-# 4-space-indented `name:` within that block. Anchoring on the job key (not on
-# the name string itself) keeps this a genuine cross-file comparison.
+# The job key is the 2-space-indented `live-smoke:` (an optional trailing YAML
+# comment is tolerated); its `name:` is the first 4-space-indented `name:`
+# within that block, with surrounding YAML quotes stripped. Anchoring on the job
+# key (not on the name string itself) keeps this a genuine cross-file
+# comparison.
 _advisory_from_ci="$(
   awk '
-    /^  live-smoke:[[:space:]]*$/ { in_job=1; next }
+    /^  live-smoke:[[:space:]]*(#.*)?$/ { in_job=1; next }
     in_job && /^  [^[:space:]]/ { exit }
-    in_job && /^    name:[[:space:]]/ { sub(/^    name:[[:space:]]*/, ""); print; exit }
+    in_job && /^    name:[[:space:]]/ {
+      sub(/^    name:[[:space:]]*/, "")
+      gsub(/^["\047]|["\047]$/, "")
+      print; exit
+    }
   ' "$CI_YML"
 )"
 
@@ -59,8 +74,10 @@ _advisory_from_ci="$(
 if [[ -n "$_advisory_from_provider" ]]; then
   echo -e "  ${GREEN}PASS${NC}: provider declares a non-empty advisory check name (|$_advisory_from_provider|)"; PASS=$((PASS + 1))
 else
-  echo -e "  ${RED}FAIL${NC}: provider read yielded an EMPTY name — is _CHP_GITHUB_ADVISORY_SKIPPED_CHECK declared in providers/chp-github.sh?"; FAIL=$((FAIL + 1))
+  echo -e "  ${RED}FAIL${NC}: provider read yielded an EMPTY name — _CHP_GITHUB_ADVISORY_SKIPPED_CHECK is undeclared in providers/chp-github.sh OR the file failed to source; source stderr:"; FAIL=$((FAIL + 1))
+  if [[ -s "$_advisory_err" ]]; then sed 's/^/      /' "$_advisory_err"; fi
 fi
+rm -f "$_advisory_err"
 if [[ -n "$_advisory_from_ci" ]]; then
   echo -e "  ${GREEN}PASS${NC}: ci.yml live-smoke job declares a non-empty name (|$_advisory_from_ci|)"; PASS=$((PASS + 1))
 else
@@ -75,9 +92,11 @@ else
   echo -e "  ${RED}FAIL${NC}: TC-SOT-CI-ADVISORY-NAME MISMATCH: provider=|${_advisory_from_provider}| ci.yml=|${_advisory_from_ci}| — a rename on either side silently re-blocks the advisory check; update both in the same change"; FAIL=$((FAIL + 1))
 fi
 
-# Sanity: the constant must actually be referenced by the ci-status leaf, so a
-# later refactor that drops the normalization is caught too.
-if grep -qF '$_CHP_GITHUB_ADVISORY_SKIPPED_CHECK' "$CHP_GITHUB"; then
+# Sanity: the constant must actually be consumed by the ci-status leaf (as the
+# jq `--arg advisory` value), so a later refactor that drops the normalization
+# is caught. Anchoring on the call shape — not a bare `$…` substring — keeps
+# this a real assertion (a comment mentioning the variable cannot satisfy it).
+if grep -qF -- '--arg advisory "$_CHP_GITHUB_ADVISORY_SKIPPED_CHECK"' "$CHP_GITHUB"; then
   echo -e "  ${GREEN}PASS${NC}: chp_github_ci_status consumes _CHP_GITHUB_ADVISORY_SKIPPED_CHECK"; PASS=$((PASS + 1))
 else
   echo -e "  ${RED}FAIL${NC}: _CHP_GITHUB_ADVISORY_SKIPPED_CHECK is declared but never consumed by the ci-status leaf"; FAIL=$((FAIL + 1))
