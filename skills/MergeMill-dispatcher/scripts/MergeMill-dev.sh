@@ -203,7 +203,7 @@ fi
 ADT_GUARD_FD=""
 if [[ -n "$ADT_LANE_DIR" ]]; then
   if ! command -v setsid >/dev/null 2>&1; then
-    echo "[MergeMill-dev] ERROR: setsid (util-linux) is missing — the guardian sidecar cannot be installed for this run. On macOS: brew install util-linux. Proceeding WITHOUT a guardian; the periodic GC (adt-gc.sh) remains the backstop reaper for this lane (degraded but not a hard abort — bricking every dispatch on a host missing setsid would be worse than degraded-to-GC-only reaping)." >&2
+    echo "[MergeMill-dev] ERROR: setsid (util-linux) is missing — the guardian sidecar cannot be installed for this run. On macOS: brew install util-linux (Homebrew installs it keg-only: if util-linux is already present, add e.g. /opt/homebrew/opt/util-linux/bin to PATH — lib-lane.sh's INV-125 probe does that automatically whenever the directory exists). Proceeding WITHOUT a guardian; the periodic GC (adt-gc.sh) remains the backstop reaper for this lane (degraded but not a hard abort — bricking every dispatch on a host missing setsid would be worse than degraded-to-GC-only reaping)." >&2
   elif ! mkfifo "${ADT_LANE_DIR}/guard.fifo" 2>/dev/null; then
     echo "[MergeMill-dev] WARNING: mkfifo failed for the guardian's FIFO — proceeding without a guardian for this run (GC remains the backstop)." >&2
   else
