@@ -162,18 +162,10 @@ lane_ensure_setsid_path() {
   return 1
 }
 
-# Source-time invocation — the single chokepoint. Both wrappers,
-# dispatch-local.sh and adt-gc.sh source this lib directly; lib-agent.sh and
-# lib-review-e2e.sh are sourced by those wrappers and inherit the normalized
-# PATH; lib-guardian.sh runs as its own `setsid`-detached process but re-sources
-# this lib itself, so it runs the probe in its own process too. Every process a
-# covered entry point later spawns — the agent CLI, fan-out and E2E subshells —
-# inherits the normalized PATH by ordinary environment inheritance, so no
-# per-spawn plumbing is needed. (dispatcher-tick.sh does NOT source this lib —
-# and contains no `command -v setsid` guard either, so it needs nothing from
-# this probe; its children, dispatch-local.sh and the wrappers, do their own
-# sourcing.) `|| true` keeps a genuinely setsid-less host on its pre-existing
-# degraded path rather than aborting the dispatch under `set -e`.
+# Source-time invocation — the single chokepoint. Which entry points reach it
+# (and which deliberately do not) is INV-125 rule 1's subject; the property
+# that matters HERE is that `|| true` keeps a setsid-less host on its
+# pre-existing degraded path rather than aborting the dispatch under `set -e`.
 lane_ensure_setsid_path || true
 
 # ---------------------------------------------------------------------------

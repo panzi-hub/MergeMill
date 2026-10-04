@@ -221,17 +221,27 @@ for entry in MergeMill-dev.sh MergeMill-review.sh adt-gc.sh; do
   fi
 done
 
-# (C) Library guard sites are only ever loaded/run by a wrapper — which itself
-#     sourced the lib — so they inherit the normalized PATH at runtime. A lib
-#     that stopped being referenced from either wrapper would silently fall out
-#     of coverage, so pin the reference.
-for lib in lib-agent.sh lib-guardian.sh lib-review-e2e.sh; do
-  if grep -q "$lib" "$SCRIPTS/MergeMill-dev.sh" || grep -q "$lib" "$SCRIPTS/MergeMill-review.sh"; then
-    assert_pass "$lib is loaded/run by a wrapper (inherits the normalized PATH)"
+# (C) Library guard sites inherit the normalized PATH at runtime by one of two
+#     mechanisms, and each must be pinned by the ACTUAL source statement — a
+#     bare name match also fires on a comment or a log string, which is how a
+#     removed `source` could stay green here.
+srcs_in() { # srcs_in <file> <regex-for-the-sourced-path>
+  grep -qE "(^|[[:space:]])(source|\.)[[:space:]]+.*$2" "$SCRIPTS/$1"
+}
+for lib in lib-agent.sh lib-review-e2e.sh; do
+  if srcs_in MergeMill-dev.sh "$lib" || srcs_in MergeMill-review.sh "$lib"; then
+    assert_pass "$lib is sourced by a wrapper (inherits the normalized PATH)"
   else
-    assert_fail "$lib evaluates a setsid guard but no wrapper loads it"
+    assert_fail "$lib evaluates a setsid guard but no wrapper sources it"
   fi
 done
+# lib-guardian.sh runs as its own `setsid`-detached process, so it cannot
+# inherit anything from the wrapper: it must re-source the lib itself.
+if srcs_in lib-guardian.sh 'lib-lane\.sh'; then
+  assert_pass "lib-guardian.sh re-sources lib-lane.sh in its own process"
+else
+  assert_fail "lib-guardian.sh evaluates a setsid guard but does not re-source lib-lane.sh"
+fi
 
 # ---------------------------------------------------------------------------
 echo ""
