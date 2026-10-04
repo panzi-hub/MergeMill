@@ -2947,16 +2947,19 @@ fetch_pr_for_issue() {
   resolve_pr_for_issue "$issue_num" "$fields"
 }
 
-# Step 5a: returns 0 if the PR's CI is fully green (all checks SUCCESS, ≥1
-# check present). Returns 1 on any other outcome (pending, failing, no checks,
-# transport error). Documented mock seam
+# Step 5a: returns 0 if the PR's CI is green — every merge-required check is
+# SUCCESS (≥1 check present); the label-gated advisory live-smoke check may be
+# SKIPPED without blocking. Returns 1 on any other outcome (pending, failing,
+# no checks, transport error). Documented mock seam
 # (test-dispatcher-tick-app-auth.sh:104 function-mocks it) — the NAME +
 # rc-boolean contract is stable regardless of the leaf shape.
 #
 # [INV-87] W1d (#399): `chp_ci_status` now returns exactly one normalized
 # token `green|pending|failed|none` on rc 0 (or rc≠0 on genuine transport
-# failure); the leaf owns the full `gh pr checks --json state` argv AND the
-# green-predicate + rule-2-beats-rule-3 projection that used to live here.
+# failure); the leaf owns the full `gh pr checks --json name,state` argv AND
+# the green-predicate + rule-2-beats-rule-3 projection + the rule-4
+# advisory-SKIPPED normalization (`_CHP_GITHUB_ADVISORY_SKIPPED_CHECK`) that
+# used to live here.
 # This function keeps its existing capture-then-test structure — assign the
 # leaf's token under the existing mktemp/WARN transport-failure path
 # (TC-DSAP-014 pins the WARN wording; a failed query logs the WARN and

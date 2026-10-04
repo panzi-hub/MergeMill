@@ -323,6 +323,23 @@ chp_github_find_pr_for_issue() {
   jq -c "$projection" <<<"$nodes"
 }
 
+# _CHP_GITHUB_ADVISORY_SKIPPED_CHECK — the ONE label-gated advisory CI check
+# that chp_github_ci_status normalizes from SKIPPED → SUCCESS (rule 4 below).
+#
+# SINGLE SOURCE OF TRUTH: this literal MUST byte-match the `name:` of the
+# label-gated live-smoke job in .github/workflows/ci.yml. If that workflow job
+# is ever renamed, this constant MUST be updated in the SAME change — otherwise
+# the provider keeps matching the OLD name, the advisory SKIPPED record silently
+# reverts to `pending` (i.e. it becomes blocking again), and no runtime test
+# fails. The cross-file consistency guard that pins this against ci.yml is
+# tests/unit/test-chp-ci-advisory-check-name-sot.sh.
+#
+# Guarded `readonly` (same reason as `_CHP_GITHUB_PR_FIELDS_SUPPORTED` above):
+# lib-code-host.sh is self-sourced transitively more than once, so a bare
+# `readonly …=` on the second source aborts under `set -e`.
+declare -p _CHP_GITHUB_ADVISORY_SKIPPED_CHECK >/dev/null 2>&1 || \
+  readonly _CHP_GITHUB_ADVISORY_SKIPPED_CHECK='Live agent-smoke (self-hosted, label-gated)'
+
 # chp_github_ci_status PR — normalized CI-status token (#399 W1d, [INV-87]).
 #
 # Spec §3.2: the leaf owns the FULL `gh pr checks --json name,state` argv AND
@@ -340,8 +357,10 @@ chp_github_find_pr_for_issue() {
 #
 # Rule 2 beats rule 3 (a FAILURE+SKIPPED set is `failed`). SKIPPED is normally
 # not SUCCESS and remains `pending`; the one exception is the deliberately
-# advisory, label-gated live-smoke job, which is expected to be SKIPPED on
-# ordinary PRs and is not a merge-required check.
+# advisory, label-gated live-smoke job named by
+# `_CHP_GITHUB_ADVISORY_SKIPPED_CHECK` (single source of truth, pinned against
+# .github/workflows/ci.yml), which is expected to be SKIPPED on ordinary PRs
+# and is not a merge-required check.
 #
 # gh rc-quirk (R2): `gh pr checks` exits non-zero for failing/pending/no-checks
 # cases even when the JSON payload is well-formed. The leaf inspects stdout —
@@ -353,7 +372,6 @@ chp_github_find_pr_for_issue() {
 chp_github_ci_status() {
   local pr="$1"
   local raw gh_err checks token
-  local advisory_skipped_check='Live agent-smoke (self-hosted, label-gated)'
   # Capture stderr to a scratch file so we can (a) discard it when the payload
   # is parseable JSON (gh's rc-quirk emits noise on stderr even for a valid
   # payload) and (b) forward it to OUR stderr when the payload is not
@@ -394,10 +412,12 @@ chp_github_ci_status() {
   }
   rm -f "$gh_err"
   # Bucket the check records per the R1 decision order. Only the explicitly
-  # named advisory live-smoke check may have SKIPPED normalized to SUCCESS.
-  # Keeping every record in the multiset means a failure in that job still
-  # remains visible, while an unrelated skipped/unknown check stays pending.
-  token="$(jq -r --arg advisory "$advisory_skipped_check" '
+  # named advisory live-smoke check (_CHP_GITHUB_ADVISORY_SKIPPED_CHECK, the
+  # single source of truth pinned against ci.yml) may have SKIPPED normalized
+  # to SUCCESS. Keeping every record in the multiset means a failure in that
+  # job still remains visible, while an unrelated skipped/unknown check stays
+  # pending.
+  token="$(jq -r --arg advisory "$_CHP_GITHUB_ADVISORY_SKIPPED_CHECK" '
     map(if .name == $advisory and .state == "SKIPPED"
         then .state = "SUCCESS" else . end) as $normalized
     | if ($normalized | length) == 0 then "none"
