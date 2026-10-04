@@ -79,7 +79,12 @@ mark_action() {
 
   # If no files provided, use staged files for commit-related actions
   if [[ ${#files[@]} -eq 0 ]]; then
-    mapfile -t files < <(get_staged_files)
+    # bash 3.2 (macOS /bin/bash) has no mapfile; read the staged-file list
+    # line-by-line instead so this hook works under the system bash too.
+    local _f
+    while IFS= read -r _f; do
+      [[ -n "$_f" ]] && files+=("$_f")
+    done < <(get_staged_files)
   fi
 
   # Create JSON (with or without jq)
@@ -145,7 +150,11 @@ check_action() {
       exit 1
     fi
     local state_time
-    state_time=$(date -d "$timestamp" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s 2>/dev/null || echo "0")
+    # Timestamps are written in UTC (see mark_action). The BSD fallback MUST
+    # also parse in UTC (`-u`), otherwise a UTC string is interpreted as local
+    # time and the age is inflated by the host's UTC offset — making a just-
+    # written mark look hours old and expiring it. Prefer `gdate` when present.
+    state_time=$(gdate -d "$timestamp" +%s 2>/dev/null || date -d "$timestamp" +%s 2>/dev/null || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s 2>/dev/null || echo "0")
     local current_time
     current_time=$(date +%s)
     local age=$((current_time - state_time))

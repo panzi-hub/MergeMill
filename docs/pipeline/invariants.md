@@ -6757,3 +6757,30 @@ _Triage (issue #236): [machine-checked: tests/unit/test-token-refresh-daemon-res
 **Cross-references**:
 - [INV-79] — the scoped agent-token daemon reuses this exact script (6-arg form), so all three rules above hold for the agent-side token too.
 - [INV-65] — the LIB_DIR realpath resolution the test's injection seam relies on.
+
+---
+
+## INV-124: workflow state marks are timestamped in UTC, parsed in UTC by a host-portable resolver, and the staged-file list is read without bash-4-only builtins
+
+_Triage (issue #236): [machine-checked: tests/unit/test-state-manager-macos-portability.sh]_
+
+**Rule**:
+
+1. **UTC write/read agreement.** `mark_action` writes the mark timestamp in UTC (`date -u +"%Y-%m-%dT%H:%M:%SZ"`). Any age computation in `check_action` MUST therefore parse that string as UTC — `gdate -d` (GNU coreutils, if present) → GNU `date -d` → BSD `date -u -j -f`. Omitting `-u` on the BSD branch parses the UTC stamp as local time; on a host at `TZ=UTC+8` this inflates the age by 28800 s, so a mark written seconds ago exceeds the 1800 s expiry, is deleted, and the push stays blocked (issue #23).
+2. **Fail-closed resolution.** If no resolver succeeds the chain yields `0`; `age = now - 0` then exceeds the 1800 s window and the mark is invalidated. A host that cannot parse the stamp blocks, never accepts a stale one.
+3. **bash-3.2 portability.** The staged-file list MUST be read without bash-4-only builtins — `mapfile` and its synonym `readarray` are absent from the `/bin/bash` 3.2 shipped with macOS. Use a `while IFS= read -r` loop (which also keeps `files+=()` in the current shell via process substitution).
+4. **Gate not weakened.** The `pr-review` mark MUST remain both fresh (≤1800 s) and bound to the current `HEAD`; this invariant changes no gate semantics and introduces no bypass.
+
+**Why**: the workflow hooks run under the host's system `/bin/bash`, which on a default macOS install is 3.2 with BSD `date`. The two defects above made the `pr-review` gate unsatisfiable on that host — a dev agent that correctly ran the review still could not push (#23). The pipeline's enforcement layer must behave identically across GNU/Linux and stock macOS, or the gate becomes a host-dependent blocker.
+
+**Producer**: `skills/MergeMill-common/hooks/state-manager.sh` (`mark_action`'s UTC stamp; `check_action`'s resolver + staged-file loop).
+
+**Consumer**: `skills/MergeMill-common/hooks/check-pr-review.sh` and every workflow-gate hook that reads state via `state-manager.sh`, on any host whose `/bin/bash` is 3.2 and/or whose `date` is BSD.
+
+**Status**: **ENFORCED**.
+
+**Test**: `tests/unit/test-state-manager-macos-portability.sh` — drives the real hook against a scratch git repo with an isolated `CLAUDE_PROJECT_DIR`. A BSD-`date` `PATH` shim (rejects `-d`; `-j -f` parses local, `-u -j -f` parses UTC) at `TZ=Asia/Shanghai` (UTC+8) proves the false-expiry fix (TC-SMP-003..005, 008, with TC-SMP-005 asserting the shim reproduces the 28800 s skew); `enable -n mapfile readarray` emulates bash 3.2 for the no-builtin path (TC-SMP-001, 002); TC-SMP-006 pins GNU/Linux parity; TC-SMP-007 pins the HEAD binding. The suite fails 4/8 against the pre-fix hook.
+
+**Cross-references**:
+- #23 — the macOS-portability bug this invariant codifies (PR #24).
+- [INV-122] — sibling hardening of the same `skills/MergeMill-common/hooks/` enforcement layer (fail-closed parse gate, wrapper-form `git` recognition).
