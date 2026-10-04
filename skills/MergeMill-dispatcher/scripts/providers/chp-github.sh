@@ -334,11 +334,17 @@ chp_github_find_pr_for_issue() {
 # fails. The cross-file consistency guard that pins this against ci.yml is
 # tests/unit/test-chp-ci-advisory-check-name-sot.sh.
 #
-# Guarded `readonly` (same reason as `_CHP_GITHUB_PR_FIELDS_SUPPORTED` above):
-# lib-code-host.sh is self-sourced transitively more than once, so a bare
-# `readonly …=` on the second source aborts under `set -e`.
-declare -p _CHP_GITHUB_ADVISORY_SKIPPED_CHECK >/dev/null 2>&1 || \
+# Guarded `readonly`: lib-code-host.sh is self-sourced transitively more than
+# once, so a bare `readonly …=` on the second source aborts under `set -e`.
+# Unlike the `_CHP_GITHUB_PR_FIELDS_*` lists above, this value gates which CI
+# checks block a merge, so the plain `declare -p … || readonly …` guard is not
+# enough — it treats an inherited (non-readonly) environment binding as "already
+# declared" and would let it shadow the literal. Skipping only when the existing
+# binding is actually readonly overrides any inherited value on first source
+# (matching the pre-hoist `local`) while staying re-source-safe.
+if [[ "$(declare -p _CHP_GITHUB_ADVISORY_SKIPPED_CHECK 2>/dev/null)" != declare\ -r* ]]; then
   readonly _CHP_GITHUB_ADVISORY_SKIPPED_CHECK='Live agent-smoke (self-hosted, label-gated)'
+fi
 
 # chp_github_ci_status PR — normalized CI-status token (#399 W1d, [INV-87]).
 #

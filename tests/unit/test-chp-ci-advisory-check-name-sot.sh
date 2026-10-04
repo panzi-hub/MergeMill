@@ -94,9 +94,13 @@ fi
 
 # Sanity: the constant must actually be consumed by the ci-status leaf (as the
 # jq `--arg advisory` value), so a later refactor that drops the normalization
-# is caught. Anchoring on the call shape — not a bare `$…` substring — keeps
-# this a real assertion (a comment mentioning the variable cannot satisfy it).
-if grep -qF -- '--arg advisory "$_CHP_GITHUB_ADVISORY_SKIPPED_CHECK"' "$CHP_GITHUB"; then
+# is caught. Comment lines are stripped first, so a comment that merely mentions
+# the invocation cannot satisfy the assertion. (The comment-stripped source is
+# captured into a variable rather than piped straight into `grep -q`, because an
+# early-exiting consumer in a `pipefail` pipeline would trip on the upstream
+# writer's SIGPIPE and report a spurious FAIL.)
+_noncomment_src="$(grep -v '^[[:space:]]*#' "$CHP_GITHUB")"
+if grep -qF -- '--arg advisory "$_CHP_GITHUB_ADVISORY_SKIPPED_CHECK"' <<<"$_noncomment_src"; then
   echo -e "  ${GREEN}PASS${NC}: chp_github_ci_status consumes _CHP_GITHUB_ADVISORY_SKIPPED_CHECK"; PASS=$((PASS + 1))
 else
   echo -e "  ${RED}FAIL${NC}: _CHP_GITHUB_ADVISORY_SKIPPED_CHECK is declared but never consumed by the ci-status leaf"; FAIL=$((FAIL + 1))
