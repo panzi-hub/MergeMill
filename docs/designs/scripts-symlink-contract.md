@@ -8,14 +8,14 @@
 
 The repository commits `scripts` as a symlink to
 `skills/MergeMill-dispatcher/scripts` (git tree mode `120000`, verified
-with `git ls-files -s scripts`). Every dispatcher entry point is invoked
+with `git ls-files -s scripts`). The dispatcher invokes its wrappers
 through that path, e.g. `$PROJECT_DIR/scripts/MergeMill-dev.sh`,
 `$PROJECT_DIR/scripts/dispatcher-tick.sh`.
 
 If the symlink is ever replaced by a regular directory, repointed, or a
 checkout/tooling step materializes it as a real dir, those invocation
-paths break **silently** — the wrapper is simply not found, and nothing
-in CI catches it today. Existing coverage (`test-symlink-resolution.sh`,
+paths break **silently** — the wrapper is simply not found. This test
+makes that failure loud. Existing coverage (`test-symlink-resolution.sh`,
 `test-entry-point-resolution.sh`) exercises symlink *resolution logic*
 inside scripts, not the repository's own top-level `scripts` symlink.
 

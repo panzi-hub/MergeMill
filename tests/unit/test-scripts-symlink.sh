@@ -3,10 +3,11 @@
 # contract (issue #26).
 #
 # `scripts` is committed as a symlink to skills/MergeMill-dispatcher/scripts
-# (git tree mode 120000). Every dispatcher entry point is invoked as
+# (git tree mode 120000). The dispatcher invokes its wrappers as
 # "$PROJECT_DIR/scripts/<name>.sh", so if the symlink is replaced by a real
-# directory or repointed, those invocation paths break silently — nothing in
-# CI catches it today. This test fails loudly instead.
+# directory or repointed, those invocation paths break silently. Without this
+# test the failure goes unnoticed; CI runs this file, so a broken link now
+# fails the build instead.
 #
 # Hermetic: reads the repo tree read-only; negative fixtures live in a single
 # mktemp dir removed on EXIT. No network, no writes outside the temp dir.
@@ -42,9 +43,10 @@ check_scripts_symlink() {
   # 1. Must be a symlink (lstat), not a regular directory or file.
   [[ -L "$scripts" ]] || return 1
 
-  # 2. Must resolve to the expected directory. `cd -P` follows the link and
-  #    yields a physical path, so a relative or an absolute readlink value
-  #    (and multi-hop chains) all normalize to the same answer.
+  # 2. Must resolve to the expected directory. `cd`-ing into the link then
+  #    `pwd -P` follows it and yields a physical path, so a relative or an
+  #    absolute readlink value (and multi-hop chains) all normalize to the
+  #    same answer.
   resolved="$(cd "$scripts" 2>/dev/null && pwd -P)" || return 1
   expected_resolved="$(cd "$expected" 2>/dev/null && pwd -P)" || return 1
   [[ "$resolved" == "$expected_resolved" ]] || return 1
