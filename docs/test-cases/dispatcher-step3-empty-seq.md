@@ -16,9 +16,10 @@ enumeration form was `for i in $(seq 0 $((n - 1)))`.
 | BSD (macOS) | `0` then `-1` | loop runs **twice** |
 
 So on macOS, when `pending-review` was empty (`pr_count=0`), the loop body ran
-with `i=0`; `jq -r '.[0].number'` on an empty array yields `null`, and
-`dispatch review null` failed issue-format validation, aborting the whole tick
-under `set -euo pipefail` — **before Step 4 and Step 5 (crash recovery) ran**.
+with `i=0`; `jq -r '.[0].number'` on an empty array yields `null`, and the
+unguarded `label_swap "null"` reached `gh issue edit null` (`invalid issue
+format: "null"`, rc=1), aborting the whole tick under `set -euo pipefail` —
+**before Step 4 and Step 5 (crash recovery) ran**.
 
 The loop-boundary guard `if (( n > 0 )); then … fi` was introduced upstream as
 part of the dispatcher-portability sweep; it already prevents the abort. What
@@ -32,7 +33,8 @@ kept as a fast-path short-circuit (defense in depth).
 > enumerations in Step 4 and Step 5, per the issue's "一并核查" instruction.
 > Step 2 already used a bash-native C-style loop. The `seq` loop in
 > `lib-dispatch.sh::run_hygiene_pass` (Step 0) is out of scope: it is already
-> bounded by an early `[[ "$count" -eq 0 ]] && return 0` and is not a tick Step.
+> bounded by an early `if [[ "$count" -eq 0 ]]; then return 0; fi` and is not a
+> tick Step.
 
 ## Test Cases
 

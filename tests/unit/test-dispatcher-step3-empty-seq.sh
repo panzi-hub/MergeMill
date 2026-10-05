@@ -2,9 +2,10 @@
 # test-dispatcher-step3-empty-seq.sh — regression coverage for issue #28.
 #
 # dispatcher-tick.sh enumerated its per-step issue lists with
-# `for i in $(seq 0 $((n - 1)))`. On BSD/macOS `seq 0 -1` prints `0\n-1`
+# `for i in $(seq 0 $((n - 1)))`. On BSD/macOS `seq 0 -1` prints `0` then `-1`
 # (GNU prints nothing), so an empty list iterated twice; `jq '.[0].number'`
-# on an empty array yields `null`, and `dispatch review null` aborted the
+# on an empty array yields `null`, and the unguarded `label_swap "null"`
+# reached `gh issue edit null` (`invalid issue format`, rc=1), aborting the
 # whole tick under `set -euo pipefail` before Steps 4/5 (crash recovery).
 #
 # The fix replaces the `seq` enumeration with bash-native arithmetic

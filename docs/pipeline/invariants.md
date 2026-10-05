@@ -6823,7 +6823,7 @@ _Triage (issue #236): [machine-checked: tests/unit/test-dispatcher-step3-empty-s
 **Rule**:
 
 1. **Bash-native enumeration.** Each per-issue loop in `dispatcher-tick.sh` — Step 3 scan-pending-review, Step 4 scan-pending-dev, Step 5 stale detection — enumerates with `for ((i = 0; i < <count>; i++))`, never `for i in $(seq 0 $((<count> - 1)))`. A bash arithmetic loop runs zero times for a zero bound on every host; a `seq`-driven word list does not.
-2. **No `seq` at the empty boundary.** `seq 0 -1` prints nothing under GNU coreutils but `0` then `-1` under BSD/macOS. Because the tick runs under `set -euo pipefail`, the resulting `jq '.[0].number' == null` → `dispatch review null` aborts the whole tick before Steps 4/5 (crash recovery) run.
+2. **No `seq` at the empty boundary.** `seq 0 -1` prints nothing under GNU coreutils but `0` then `-1` under BSD/macOS. Before the `(( <count> > 0 ))` guards were added, that made the loop body run with `i=0`: `jq '.[0].number'` is `null`, and the unguarded `label_swap "null"` reached `gh issue edit null` (`invalid issue format`, rc=1), aborting the tick under `set -euo pipefail` before Steps 4/5 (crash recovery) run.
 3. **Fast-path guards retained.** The `(( <count> > 0 ))` guards remain as a cheap short-circuit. They are defense-in-depth, not the correctness mechanism: the C-style loop form alone is empty-safe.
 4. **No behavior change for non-empty lists.** Issue indices, dispatch order, and per-issue side effects are byte-identical to the prior form.
 
@@ -6835,7 +6835,7 @@ _Triage (issue #236): [machine-checked: tests/unit/test-dispatcher-step3-empty-s
 
 **Status**: **ENFORCED**.
 
-**Test**: `tests/unit/test-dispatcher-step3-empty-seq.sh` — TC-D3SEQ-001/002 structurally pin the absence of `seq` enumeration and the C-style loop form; TC-D3SEQ-003..006 drive the extracted Step 3 loop over 0/1/N issues under a BSD `seq` `PATH` shim; TC-D3SEQ-007 is the stub control proving the shim reproduces `0\n-1` on GNU CI; TC-D3SEQ-008 proves the loop never calls `seq`. Per-case detail in [docs/test-cases/dispatcher-step3-empty-seq.md](../test-cases/dispatcher-step3-empty-seq.md).
+**Test**: `tests/unit/test-dispatcher-step3-empty-seq.sh` — TC-D3SEQ-001/002 structurally pin the absence of `seq` enumeration and the C-style loop form; TC-D3SEQ-003 is the extraction control for the extracted Step 3 loop; TC-D3SEQ-004..006 drive that loop over 0/1/N issues under a BSD `seq` `PATH` shim; TC-D3SEQ-007 is the stub control proving the shim reproduces `0` then `-1` on GNU CI; TC-D3SEQ-008 proves the loop never calls `seq`. Per-case detail in [docs/test-cases/dispatcher-step3-empty-seq.md](../test-cases/dispatcher-step3-empty-seq.md).
 
 **Cross-references**:
 - #28 — the macOS abort this invariant codifies (fix branch `fix/dispatcher-step3-empty-seq`).

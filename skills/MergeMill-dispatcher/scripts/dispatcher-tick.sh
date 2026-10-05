@@ -470,12 +470,13 @@ log "  found $pr_count pending-review issue(s)"
 
 if (( pr_count > 0 )); then
 # Bash-native arithmetic enumeration, NOT a `seq`-driven word list over
-# `0..pr_count-1`: on BSD/macOS `seq 0 -1` prints `0 -1` (GNU prints nothing),
-# so a `seq`-based loop over an empty list iterates twice — `jq '.[0].number'`
-# on an empty array is `null`, and `dispatch review null` aborts the whole tick
-# under `set -e` before Steps 4/5 (crash recovery) run. This C-style form is
-# empty-safe on every host even without the `(( pr_count > 0 ))` fast-path
-# guard above (#28).
+# `0..pr_count-1`: on BSD/macOS `seq 0 -1` prints `0` then `-1` (GNU prints
+# nothing), so a `seq`-based loop over an empty list iterates twice — `jq
+# '.[0].number'` on an empty array is `null`, and the unguarded `label_swap
+# "null"` below reaches `gh issue edit null` ("invalid issue format", rc=1),
+# which aborts the whole tick under `set -euo pipefail` before Steps 4/5
+# (crash recovery) run. This C-style form is empty-safe on every host even
+# without the `(( pr_count > 0 ))` fast-path guard above (#28).
 for ((i = 0; i < pr_count; i++)); do
   ACTIVE=$(count_active)
   if [ "$ACTIVE" -ge "$MAX_CONCURRENT" ]; then
