@@ -144,5 +144,9 @@ bash -n scripts/dispatcher-tick.sh       # 每次 tick 的入口点
 
 6. 冒烟测试语法：`bash -n scripts/MergeMill-dev.sh scripts/MergeMill-review.sh scripts/dispatcher-tick.sh`。报告任何错误。
 
-7. **到此为止。** 不要设置 dispatcher cron——这是由用户根据他们使用的编排主机（OpenClaw、普通 cron + Agent CLI、GitHub Actions schedule 等）单独决定的。告诉用户 README 的"运行完整流水线"部分列出了哪些选项，让他们自行选择。
+7. 本版本只支持 macOS。安装唯一的 dispatcher 时钟，不要提供 cron、OpenClaw 或其他调度器：
+   ```bash
+   bash scripts/install-dispatcher-timer.sh
+   ```
+   该命令只在 macOS 上安装 launchd agent（每 300 秒运行一次 `dispatcher-tick.sh`）。非 macOS 会失败退出。不要改用 crontab。
 ````

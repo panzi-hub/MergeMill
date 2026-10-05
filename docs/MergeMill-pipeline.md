@@ -21,9 +21,9 @@ MergeMill Dev Team 流水线自动化了 GitHub issue 的完整软件开发生�
                     └──────────────┬───────────────┘
                                    │
                           ┌────────▼────────┐
-                          │    OpenClaw      │
+                          │  launchd agent   │
                           │   Dispatcher     │
-                          │  (cron 5min)     │
+                          │  (every 300s)    │
                           └──┬─────────┬────┘
                              │         │
                    ┌─────────▼──┐  ┌───▼──────────┐
@@ -47,7 +47,7 @@ MergeMill Dev Team 流水线自动化了 GitHub issue 的完整软件开发生�
 
 | 组件 | 运行时 | 职责 |
 |-----------|---------|----------------|
-| OpenClaw Dispatcher | Cron（每 5 分钟） | 扫描 issue、管理标签、调度 dev/review Agent |
+| launchd Dispatcher | 每 300 秒一次 tick | 扫描 issue、管理标签、调度 dev/review Agent |
 | Dev Agent | 编程 Agent 会话 | 实现需求、编写测试、创建 PR |
 | Review Agent | 编程 Agent 会话 | 审查 PR、运行 E2E 测试、批准或请求变更 |
 
@@ -55,7 +55,7 @@ MergeMill Dev Team 流水线自动化了 GitHub issue 的完整软件开发生�
 
 ## 前置条件
 
-- **OpenClaw** — Agent 编排平台（或使用 `dispatch-local.sh` 进行本地调度）
+- **macOS launchd** — 唯一的 dispatcher 时钟。用 `bash scripts/install-dispatcher-timer.sh` 安装。不要使用 cron 或 OpenClaw。
 - **编程 Agent CLI** — 以下之一：`claude`（Claude Code）、`codex`、`gemini`、`kiro` 或 `opencode`
 - **GitHub CLI**（`gh`）— 使用适当权限认证
 - **jq** — JSON 处理器，用于解析 GitHub API 响应
@@ -97,25 +97,15 @@ E2E_ENABLED="false"
 
 所有可用选项见[配置参考](#配置参考)部分。
 
-### 4. 设置调度
+### 4. 安装时钟
 
-**选项 A：OpenClaw cron（推荐）**
-
-```bash
-openclaw cron add \
-  --name "MergeMill Dispatcher" \
-  --cron "*/5 * * * *" \
-  --session isolated \
-  --message "Run the MergeMill-dispatcher skill. Check GitHub issues and dispatch tasks." \
-  --announce
-```
-
-**选项 B：本地调度脚本**
+只有一种方式：
 
 ```bash
-# 手动运行 dispatcher
-bash scripts/dispatch-local.sh
+bash scripts/install-dispatcher-timer.sh
 ```
+
+这会安装 macOS launchd agent `com.mergemill.dispatcher`，每 300 秒运行一次 `dispatcher-tick.sh`。不要安装 cron，也不要安装 OpenClaw。非 macOS 会失败退出。
 
 ### 5. 创建带 `MergeMill` 标签的 issue
 

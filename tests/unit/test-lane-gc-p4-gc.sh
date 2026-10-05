@@ -1359,36 +1359,18 @@ rm -rf "$TMPBIN93"
 echo ""
 echo "=== TC-LGC4-100..105: install-gc-timer.sh ==="
 # ===========================================================================
+# macOS is the only supported host. A Linux uname must refuse before touching
+# crontab; the Darwin launchd branch is covered below.
 TIMERBIN=$(mktemp -d)
 CRONSTORE=$(mktemp)
-cat > "$TIMERBIN/crontab" <<'EOF'
-#!/bin/bash
-STORE="${CRONTAB_STUB_STORE:?}"
-if [[ "$1" == "-l" ]]; then
-  [[ -f "$STORE" ]] && cat "$STORE"
-  exit 0
-elif [[ "$1" == "-" ]]; then
-  cat > "$STORE"
-  exit 0
-fi
-exit 1
-EOF
-chmod +x "$TIMERBIN/crontab"
 echo "unrelated-existing-line" > "$CRONSTORE"
-
-PATH="$TIMERBIN:$PATH" CRONTAB_STUB_STORE="$CRONSTORE" ADT_STATE_ROOT="$(mktemp -d)" bash "$INSTALL_GC_TIMER" >/dev/null 2>&1
-MARKER_COUNT_1=$(grep -c 'adt-gc-timer' "$CRONSTORE")
-assert_eq "TC-LGC4-100: fresh install adds exactly one marked line" "1" "$MARKER_COUNT_1"
-assert_contains "TC-LGC4-100b: unrelated existing crontab content preserved" "unrelated-existing-line" "$(cat "$CRONSTORE")"
-
-PATH="$TIMERBIN:$PATH" CRONTAB_STUB_STORE="$CRONSTORE" ADT_STATE_ROOT="$(mktemp -d)" bash "$INSTALL_GC_TIMER" >/dev/null 2>&1
-MARKER_COUNT_2=$(grep -c 'adt-gc-timer' "$CRONSTORE")
-assert_eq "TC-LGC4-101: re-run stays idempotent (still exactly one marked line)" "1" "$MARKER_COUNT_2"
-
-PATH="$TIMERBIN:$PATH" CRONTAB_STUB_STORE="$CRONSTORE" bash "$INSTALL_GC_TIMER" --uninstall >/dev/null 2>&1
-MARKER_COUNT_3=$(grep -c 'adt-gc-timer' "$CRONSTORE" || true)
-assert_eq "TC-LGC4-102: --uninstall removes the marked line" "0" "$MARKER_COUNT_3"
-assert_contains "TC-LGC4-102b: unrelated content still preserved after uninstall" "unrelated-existing-line" "$(cat "$CRONSTORE")"
+OUT100=$(PATH="$TIMERBIN:$PATH" _LANE_UNAME_OVERRIDE=Linux ADT_STATE_ROOT="$(mktemp -d)" bash "$INSTALL_GC_TIMER" 2>&1); RC100=$?
+assert_eq "TC-LGC4-100: non-macOS installer refuses instead of editing crontab" "1" "$RC100"
+assert_contains "TC-LGC4-100b: refusal names macOS as the only supported host" "macOS is the only supported host" "$OUT100"
+assert_eq "TC-LGC4-101: refusal does not write a crontab entry" "unrelated-existing-line" "$(cat "$CRONSTORE")"
+OUT102=$(PATH="$TIMERBIN:$PATH" _LANE_UNAME_OVERRIDE=Linux bash "$INSTALL_GC_TIMER" --uninstall 2>&1); RC102=$?
+assert_eq "TC-LGC4-102: non-macOS --uninstall also refuses" "1" "$RC102"
+assert_contains "TC-LGC4-102b: unrelated crontab content is untouched" "unrelated-existing-line" "$(cat "$CRONSTORE")"
 rm -rf "$TIMERBIN" "$CRONSTORE"
 
 # macOS branch — stubbed launchctl + isolated HOME.
@@ -1774,14 +1756,10 @@ EOF
 chmod +x "$TIMERBIN210/crontab"
 DECOY_LINE_210="# note to self: do not remove the line matching adt-gc-timer (MergeMill-dev-team Lane-GC series, do not edit — managed by install-gc-timer.sh) by hand"
 echo "$DECOY_LINE_210" > "$CRONSTORE210"
-PATH="$TIMERBIN210:$PATH" CRONTAB_STUB_STORE="$CRONSTORE210" ADT_STATE_ROOT="$(mktemp -d)" bash "$INSTALL_GC_TIMER" >/dev/null 2>&1
-assert_contains "TC-LGC4-210a (P2-3): a decoy line mentioning the marker text mid-line survives install" "$DECOY_LINE_210" "$(cat "$CRONSTORE210")"
-MARKER_COUNT_210=$(grep -c 'adt-gc-timer' "$CRONSTORE210")
-assert_eq "TC-LGC4-210b (P2-3): install still adds exactly one REAL managed line alongside the surviving decoy" "2" "$MARKER_COUNT_210"
-PATH="$TIMERBIN210:$PATH" CRONTAB_STUB_STORE="$CRONSTORE210" bash "$INSTALL_GC_TIMER" --uninstall >/dev/null 2>&1
-assert_contains "TC-LGC4-210c (P2-3): the decoy line ALSO survives --uninstall" "$DECOY_LINE_210" "$(cat "$CRONSTORE210")"
-MARKER_COUNT_210B=$(grep -c 'adt-gc-timer' "$CRONSTORE210")
-assert_eq "TC-LGC4-210d (P2-3): --uninstall removes only the REAL managed line, leaving just the decoy's mention" "1" "$MARKER_COUNT_210B"
+OUT210=$(PATH="$TIMERBIN210:$PATH" _LANE_UNAME_OVERRIDE=Linux CRONTAB_STUB_STORE="$CRONSTORE210" ADT_STATE_ROOT="$(mktemp -d)" bash "$INSTALL_GC_TIMER" 2>&1); RC210=$?
+assert_eq "TC-LGC4-210a: non-macOS install refuses" "1" "$RC210"
+assert_contains "TC-LGC4-210b: a decoy crontab line is left untouched" "$DECOY_LINE_210" "$(cat "$CRONSTORE210")"
+assert_eq "TC-LGC4-210c: refusal adds no managed crontab line" "1" "$(grep -c 'adt-gc-timer' "$CRONSTORE210")"
 rm -rf "$TIMERBIN210" "$CRONSTORE210"
 
 # TC-LGC4-211 (P2-4 proof): a path containing '%' is rejected (fail loud),
@@ -1791,7 +1769,7 @@ rm -rf "$TIMERBIN210" "$CRONSTORE210"
 # logfile path.
 BADROOT_211="$P200ROOT/bad%root"
 mkdir -p "$BADROOT_211" 2>/dev/null || true
-OUT211=$(ADT_STATE_ROOT="$BADROOT_211" bash "$INSTALL_GC_TIMER" 2>&1); RC211=$?
+OUT211=$(HOME="$(mktemp -d)" _LANE_UNAME_OVERRIDE=Darwin ADT_STATE_ROOT="$BADROOT_211" bash "$INSTALL_GC_TIMER" 2>&1); RC211=$?
 assert_eq "TC-LGC4-211a (P2-4): a '%' in the derived logfile path (ADT_STATE_ROOT) is rejected with a non-zero exit" "1" "$RC211"
 assert_contains "TC-LGC4-211b (P2-4): the rejection names '%' as the reason, not a silent failure" "%" "$OUT211"
 rm -rf "$BADROOT_211" 2>/dev/null || true
@@ -1813,10 +1791,13 @@ fi
 exit 1
 EOF
 chmod +x "$TIMERBIN212/crontab"
-PATH="$TIMERBIN212:$PATH" CRONTAB_STUB_STORE="$CRONSTORE212" ADT_STATE_ROOT="$(mktemp -d)" bash "$INSTALL_GC_TIMER" >/dev/null 2>&1
-INSTALLED_LINE_212=$(grep 'adt-gc-timer' "$CRONSTORE212" | head -1)
-assert_contains "TC-LGC4-212a (P2-4): installed cron entry single-quotes the adt-gc.sh path" "bash '${ADT_GC}'" "$INSTALLED_LINE_212"
-assert_contains "TC-LGC4-212b (P2-4): installed cron entry single-quotes the logfile redirect target" ">> '" "$INSTALLED_LINE_212"
+OUT212=$(PATH="$TIMERBIN212:$PATH" _LANE_UNAME_OVERRIDE=Linux CRONTAB_STUB_STORE="$CRONSTORE212" ADT_STATE_ROOT="$(mktemp -d)" bash "$INSTALL_GC_TIMER" 2>&1); RC212=$?
+assert_eq "TC-LGC4-212: non-macOS install does not write a cron entry" "1" "$RC212"
+if [[ -s "$CRONSTORE212" ]]; then
+  assert_fail "TC-LGC4-212b: crontab stub received content on an unsupported host"
+else
+  assert_pass "TC-LGC4-212b: unsupported host leaves crontab untouched"
+fi
 rm -rf "$TIMERBIN212" "$CRONSTORE212"
 
 # TC-LGC4-213 (P2-5 proof): grep-pin — the `_gc_rotate_log` call site
