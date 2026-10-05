@@ -6,7 +6,8 @@
 # (GNU prints nothing), so an empty list iterated twice; `jq '.[0].number'`
 # on an empty array yields `null`, and the unguarded `label_swap "null"`
 # reached `gh issue edit null` (`invalid issue format`, rc=1), aborting the
-# whole tick under `set -euo pipefail` before Steps 4/5 (crash recovery).
+# whole tick under `set -euo pipefail` before Step 4 (resume) and Step 5
+# (stale/crash recovery).
 #
 # The fix replaces the `seq` enumeration with bash-native arithmetic
 # enumeration (`for ((i = 0; i < n; i++))`), which runs 0 times for an empty

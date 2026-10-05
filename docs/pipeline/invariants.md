@@ -6822,14 +6822,14 @@ _Triage (issue #236): [machine-checked: tests/unit/test-dispatcher-step3-empty-s
 
 **Rule**:
 
-1. **Bash-native enumeration.** Each per-issue loop in `dispatcher-tick.sh` — Step 3 scan-pending-review, Step 4 scan-pending-dev, Step 5 stale detection — enumerates with `for ((i = 0; i < <count>; i++))`, never `for i in $(seq 0 $((<count> - 1)))`. A bash arithmetic loop runs zero times for a zero bound on every host; a `seq`-driven word list does not.
-2. **No `seq` at the empty boundary.** `seq 0 -1` prints nothing under GNU coreutils but `0` then `-1` under BSD/macOS. Before the `(( <count> > 0 ))` guards were added, that made the loop body run with `i=0`: `jq '.[0].number'` is `null`, and the unguarded `label_swap "null"` reached `gh issue edit null` (`invalid issue format`, rc=1), aborting the tick under `set -euo pipefail` before Steps 4/5 (crash recovery) run.
+1. **Bash-native enumeration.** Each per-issue loop in `dispatcher-tick.sh` — Step 2 scan-new, Step 3 scan-pending-review, Step 4 scan-pending-dev, Step 5 stale detection — enumerates with `for ((i = 0; i < <count>; i++))`, never `for i in $(seq 0 $((<count> - 1)))`. A bash arithmetic loop runs zero times for a zero bound on every host; a `seq`-driven word list does not. (Step 2 already used this form; the invariant pins all four.)
+2. **No `seq` at the empty boundary.** `seq 0 -1` prints nothing under GNU coreutils but `0` then `-1` under BSD/macOS. Before the `(( <count> > 0 ))` guards were added, that made the loop body run with `i=0`: `jq '.[0].number'` is `null`, and the unguarded `label_swap "null"` reached `gh issue edit null` (`invalid issue format`, rc=1), aborting the tick under `set -euo pipefail` before Step 4 (resume) and Step 5 (stale/crash recovery) ran.
 3. **Fast-path guards retained.** The `(( <count> > 0 ))` guards remain as a cheap short-circuit. They are defense-in-depth, not the correctness mechanism: the C-style loop form alone is empty-safe.
 4. **No behavior change for non-empty lists.** Issue indices, dispatch order, and per-issue side effects are byte-identical to the prior form.
 
-**Why**: the dispatcher tick is the only component that runs crash recovery (Step 5). On macOS, a single empty `pending-review` list aborted the tick at Step 3 — every tick that had nothing to review skipped Step 4 (resume) and Step 5 (stale/crash recovery), so a crashed dev/review wrapper was never reaped and its issue stalled. Linux/Ubuntu (GNU `seq`) returns empty for `seq 0 -1`, which masked the defect in CI. The root fix is to stop depending on `seq` for enumeration entirely rather than to special-case the empty bound.
+**Why**: the dispatcher tick is the component that runs Step 5 crash recovery. On macOS, before the `(( <count> > 0 ))` guards were added, a single empty `pending-review` list aborted the tick at Step 3 — every tick that had nothing to review skipped Step 4 (resume) and Step 5 (stale/crash recovery), so a crashed dev/review wrapper was never reaped and its issue stalled. Linux/Ubuntu (GNU `seq`) returns empty for `seq 0 -1`, which masked the defect in CI. The root fix is to stop depending on `seq` for enumeration entirely rather than to special-case the empty bound.
 
-**Producer**: `skills/MergeMill-dispatcher/scripts/dispatcher-tick.sh` (the Step 3/4/5 loop headers).
+**Producer**: `skills/MergeMill-dispatcher/scripts/dispatcher-tick.sh` (the Step 2/3/4/5 loop headers).
 
 **Consumer**: the dispatcher tick itself, and transitively every issue that relies on Step 5 stale detection to leave `in-progress`/`reviewing` after a wrapper crash.
 
