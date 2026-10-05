@@ -469,7 +469,14 @@ pr_count=$(jq 'length' <<<"$pending_review")
 log "  found $pr_count pending-review issue(s)"
 
 if (( pr_count > 0 )); then
-for i in $(seq 0 $((pr_count - 1))); do
+# Bash-native arithmetic enumeration, NOT a `seq`-driven word list over
+# `0..pr_count-1`: on BSD/macOS `seq 0 -1` prints `0 -1` (GNU prints nothing),
+# so a `seq`-based loop over an empty list iterates twice — `jq '.[0].number'`
+# on an empty array is `null`, and `dispatch review null` aborts the whole tick
+# under `set -e` before Steps 4/5 (crash recovery) run. This C-style form is
+# empty-safe on every host even without the `(( pr_count > 0 ))` fast-path
+# guard above (#28).
+for ((i = 0; i < pr_count; i++)); do
   ACTIVE=$(count_active)
   if [ "$ACTIVE" -ge "$MAX_CONCURRENT" ]; then
     log "  concurrency reached during scan-pending-review ($ACTIVE/$MAX_CONCURRENT) — stopping"
@@ -515,7 +522,8 @@ pd_count=$(jq 'length' <<<"$pending_dev")
 log "  found $pd_count pending-dev issue(s)"
 
 if (( pd_count > 0 )); then
-for i in $(seq 0 $((pd_count - 1))); do
+# Bash-native arithmetic enumeration — see the Step 3 comment above (#28).
+for ((i = 0; i < pd_count; i++)); do
   ACTIVE=$(count_active)
   if [ "$ACTIVE" -ge "$MAX_CONCURRENT" ]; then
     log "  concurrency reached during scan-pending-dev ($ACTIVE/$MAX_CONCURRENT) — stopping"
@@ -719,7 +727,8 @@ cand_count=$(jq 'length' <<<"$candidates")
 log "  $cand_count active issue(s) to evaluate"
 
 if (( cand_count > 0 )); then
-for i in $(seq 0 $((cand_count - 1))); do
+# Bash-native arithmetic enumeration — see the Step 3 comment above (#28).
+for ((i = 0; i < cand_count; i++)); do
   issue_num=$(jq -r ".[$i].number" <<<"$candidates")
   # [W1a, #371] list_stale_candidates now returns the NORMALIZED itp_list_by_state
   # shape — `labels` is already an array of NAME strings, not `{name}` objects.
