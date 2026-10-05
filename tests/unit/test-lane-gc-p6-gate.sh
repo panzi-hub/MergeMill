@@ -696,7 +696,7 @@ echo "=== TC-LGC6-110: Step 5b DEFERRED fast-return — extracted loop body post
 # mirrors the house pattern (test-lane-gc-p5-guardian.sh's do_reap
 # extraction; test-dispatcher-step5b-dev-no-pr-heartbeat.sh's structural
 # pin) but goes one step further: BEHAVIORALLY drives the extracted block.
-STEP5_BODY=$(awk '/^for i in \$\(seq 0 \$\(\(cand_count - 1\)\)\); do$/{f=1} f{print} f && /^done$/{exit}' "$TICK")
+STEP5_BODY=$(awk 'index($0, "for ((i = 0; i < cand_count; i++)); do") == 1 {f=1} f{print} f && /^done$/{exit}' "$TICK")
 # Positive extraction-control: assert on a KNOWN-present marker (the
 # DEFERRED fast-return comment this PR adds, which must be INSIDE the
 # extracted range) rather than merely "non-empty" — a future refactor that
@@ -808,9 +808,9 @@ _run_tick_site_harness() {
 
 declare -A TICK_SITES=(
   ["step2-dev-new"]="448"
-  ["step3-review"]="495"
-  ["step4-ptl-dev-new"]="654"
-  ["step4-dev-resume"]="694"
+  ["step3-review"]="502"
+  ["step4-ptl-dev-new"]="662"
+  ["step4-dev-resume"]="702"
 )
 for site_label in step2-dev-new step3-review step4-ptl-dev-new step4-dev-resume; do
   start_line="${TICK_SITES[$site_label]}"

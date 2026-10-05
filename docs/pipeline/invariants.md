@@ -6813,3 +6813,31 @@ _Triage (issue #236): [machine-checked: tests/unit/test-setsid-keg-only-path.sh]
 - [INV-109](#inv-109-every-wrapper-run-mints-and-atomically-installs-a-durable-lane-registry-entry-before-spawning-any-background-child-including-token-daemons-and-heartbeat) / [INV-110](#inv-110-adt_lane_id-is-exported-before-any-child-spawn-and-every-_run_with_timeout-spawn-appends-its-pgid-to-the-durable-registry) — the lane registry and pgid backend that depend on `setsid`.
 - [INV-114](#inv-114-every-pipeline-initiated-kill-escalates-term--bounded-grace--sigkill-gated-on-groupscope-emptiness-never-on-leader-liveness-alone) — the kill escalation bound to the `setsid` PGID.
 - [INV-118](#inv-118-each-lane-runs-a-setsid-detached-guardian-holding-the-read-end-of-guardfifo-the-wrappers-write-end-is-opened-before-the-guardian-ever-spawns-so-kernel-eof-on-any-death--including-sigkilloom--triggers-an-idempotent-lane-scoped-reap) — the per-lane guardian sidecar installed via `setsid bash -c`.
+
+---
+
+## INV-126: dispatcher-tick step loops enumerate per-issue lists with bash-native arithmetic, so an empty list never invokes platform-specific `seq`
+
+_Triage (issue #236): [machine-checked: tests/unit/test-dispatcher-step3-empty-seq.sh]_
+
+**Rule**:
+
+1. **Bash-native enumeration.** Each per-issue loop in `dispatcher-tick.sh` — Step 2 scan-new, Step 3 scan-pending-review, Step 4 scan-pending-dev, Step 5 stale detection — enumerates with `for ((i = 0; i < <count>; i++))`, never `for i in $(seq 0 $((<count> - 1)))`. A bash arithmetic loop runs zero times for a zero bound on every host; a `seq`-driven word list does not. (Step 2 already used this form; the invariant pins all four.)
+2. **No `seq` at the empty boundary.** `seq 0 -1` prints nothing under GNU coreutils but `0` then `-1` under BSD/macOS. Before the `(( <count> > 0 ))` guards were added, that made the loop body run with `i=0`: `jq '.[0].number'` is `null`, and the unguarded `label_swap "null"` reached `gh issue edit null` (`invalid issue format`, rc=1), aborting the tick under `set -euo pipefail` before Step 4 (resume) and Step 5 (stale/crash recovery) ran.
+3. **Fast-path guards retained.** The `(( <count> > 0 ))` guards remain as a cheap short-circuit. They are defense-in-depth, not the correctness mechanism: the C-style loop form alone is empty-safe.
+4. **No behavior change for non-empty lists.** Issue indices, dispatch order, and per-issue side effects are byte-identical to the prior form.
+
+**Why**: the dispatcher tick is the component that runs Step 5 crash recovery. On macOS, before the `(( <count> > 0 ))` guards were added, a single empty `pending-review` list aborted the tick at Step 3 — every tick that had nothing to review skipped Step 4 (resume) and Step 5 (stale/crash recovery), so a crashed dev/review wrapper was never reaped and its issue stalled. Linux/Ubuntu (GNU `seq`) returns empty for `seq 0 -1`, which masked the defect in CI. The root fix is to stop depending on `seq` for enumeration entirely rather than to special-case the empty bound.
+
+**Producer**: `skills/MergeMill-dispatcher/scripts/dispatcher-tick.sh` (the Step 2/3/4/5 loop headers).
+
+**Consumer**: the dispatcher tick itself, and transitively every issue that relies on Step 5 stale detection to leave `in-progress`/`reviewing` after a wrapper crash.
+
+**Status**: **ENFORCED**.
+
+**Test**: `tests/unit/test-dispatcher-step3-empty-seq.sh` — TC-D3SEQ-001/002 structurally pin the absence of `seq` enumeration and the C-style loop form; TC-D3SEQ-003 is the extraction control for the extracted Step 3 loop; TC-D3SEQ-004..006 drive that loop over 0/1/N issues under a BSD `seq` `PATH` shim; TC-D3SEQ-007 is the stub control proving the shim reproduces `0` then `-1` on GNU CI; TC-D3SEQ-008 proves the loop never calls `seq`. Per-case detail in [docs/test-cases/dispatcher-step3-empty-seq.md](../test-cases/dispatcher-step3-empty-seq.md).
+
+**Cross-references**:
+- #28 — the macOS abort this invariant codifies (fix branch `fix/dispatcher-step3-empty-seq`).
+- [INV-124](#inv-124-workflow-state-marks-are-timestamped-in-utc-parsed-in-utc-by-a-host-portable-resolver-and-the-staged-file-list-is-read-without-bash-4-only-builtins) — sibling BSD/bash-3.2 portability invariant in the hooks layer.
+- [INV-125](#inv-125-setsid-is-resolved-through-an-append-only-source-time-fallback-probe-so-a-keg-only-util-linux-install-is-found-instead-of-silently-degrading-the-lane-backend) — sibling macOS portability invariant for `setsid` resolution.
