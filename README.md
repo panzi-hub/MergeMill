@@ -18,7 +18,7 @@
 
 ## 🇨🇳 中文
 
-MergeMill 是一个自动化开发流水线，将 Issue 转化为 Pull Request，并按仓库策略完成审查与合并。合并审批受平台权限约束：例如 GitHub 不允许 PR 作者批准自己的 PR，因此需要其他有权限的 reviewer 或配置允许的合并流程。
+MergeMill 是一个只支持 macOS 的自动化开发流水线，将 Issue 转化为 Pull Request，并按仓库策略完成审查与合并。其他系统的适配留到后续版本，不在当前仓库里并行维护。合并审批受平台权限约束：例如 GitHub 不允许 PR 作者批准自己的 PR，因此需要其他有权限的 reviewer 或配置允许的合并流程。
 
 它会扫描带有 `MergeMill` 标签的 Issue，调度一个 **Dev Agent（开发 Agent）** 在隔离的 worktree 中通过 TDD（测试驱动开发）实现功能，然后移交给 **Review Agent（审查 Agent）** 进行代码审查和可选的 E2E 验证。整个循环由 macOS launchd 每 300 秒无人值守调用。
 

@@ -144,7 +144,7 @@ bash -n scripts/dispatcher-tick.sh       # 每次 tick 的入口点
 
 6. 冒烟测试语法：`bash -n scripts/MergeMill-dev.sh scripts/MergeMill-review.sh scripts/dispatcher-tick.sh`。报告任何错误。
 
-7. 安装唯一的 dispatcher 时钟，不要提供 cron、OpenClaw 或其他调度器：
+7. 本版本只支持 macOS。安装唯一的 dispatcher 时钟，不要提供 cron、OpenClaw 或其他调度器：
    ```bash
    bash scripts/install-dispatcher-timer.sh
    ```
