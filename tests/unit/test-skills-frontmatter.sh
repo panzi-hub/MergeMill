@@ -7,10 +7,11 @@
 # non-empty. Before this test nothing under tests/unit/ parsed frontmatter, so
 # a malformed field was only surfaced at install time.
 #
-# This test enumerates <repo-root>/skills/*/SKILL.md, asserts the contract on
-# each, and drives the same validator against four mktemp-scoped negative
-# fixtures (no frontmatter / name mismatch / empty inline description / empty
-# block-scalar description).
+# This test enumerates every skills/*/ directory and validates its SKILL.md,
+# asserting the contract on each, then drives the same validator against six
+# mktemp-scoped negative fixtures (no frontmatter / name mismatch / empty
+# inline description / empty block-scalar description / empty block-scalar
+# followed by a nested sibling key / missing SKILL.md).
 #
 # Read-only against the repo tree; all fixtures live under a fresh mktemp -d,
 # so it is safe to run concurrently with any sibling test (no SERIAL_TESTS
@@ -78,14 +79,18 @@ frontmatter_scalar() {
 
 # frontmatter_description_nonempty BLOCK — rc 0 iff `description:` is present
 # with a non-empty value. Handles both inline scalars and YAML block scalars
-# (`>` / `|` variants), whose content is on the following indented lines.
+# (`>` / `|` variants), whose content is on the following indented lines. A
+# block scalar ends at the first dedented (top-level) line, so an empty
+# `description: >` followed by an indented sibling key (e.g. `hooks:`) is
+# correctly rejected rather than having that sibling counted as body text.
 frontmatter_description_nonempty() {
   local block="$1"
   printf '%s\n' "$block" | awk '
     BEGIN { found = 0; pending = 0; nonempty = 0 }
     found && pending {
-      if ($0 ~ /^[[:space:]]+[^[:space:]]/) { nonempty = 1 }
-      next
+      if ($0 ~ /^[[:space:]]*$/) { next }                            # blank line: keep scanning
+      if ($0 ~ /^[[:space:]]+[^[:space:]]/) { nonempty = 1; next }   # indented body line
+      pending = 0; next                                              # dedented key: block ended
     }
     index($0, "description:") == 1 {
       found = 1
@@ -233,6 +238,24 @@ description: >
 ---
 EOF
 
+# TC-SKILLFM-105: empty `description: >` immediately followed by an indented
+# sibling key (mirrors MergeMill-review/SKILL.md, whose `hooks:` block sits
+# right after the description). A parser that fails to end the block scalar at
+# a dedented line would count the `hooks:` children as description body and
+# wrongly accept this.
+write_fixture empty-description-block-then-sibling <<'EOF'
+---
+name: empty-description-block-then-sibling
+description: >
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+---
+EOF
+
+# TC-SKILLFM-106: skill directory with no SKILL.md at all.
+mkdir -p "$FIX/no-skillmd"
+
 run_negative_fixture "TC-SKILLFM-101" "no frontmatter" \
   "$FIX/no-frontmatter" "frontmatter opens with --- and closes with ---"
 run_negative_fixture "TC-SKILLFM-102" "name/dir mismatch" \
@@ -241,6 +264,10 @@ run_negative_fixture "TC-SKILLFM-103" "empty inline description" \
   "$FIX/empty-description" "description is present and non-empty"
 run_negative_fixture "TC-SKILLFM-104" "empty block-scalar description" \
   "$FIX/empty-description-block" "description is present and non-empty"
+run_negative_fixture "TC-SKILLFM-105" "empty block-scalar description followed by nested key" \
+  "$FIX/empty-description-block-then-sibling" "description is present and non-empty"
+run_negative_fixture "TC-SKILLFM-106" "missing SKILL.md" \
+  "$FIX/no-skillmd" "SKILL.md exists"
 
 # ---------------------------------------------------------------------------
 echo ""

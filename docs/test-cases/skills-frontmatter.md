@@ -7,12 +7,14 @@ basename and `description` must be non-empty. Before this change nothing in
 install time.
 
 This change adds a deterministic, network-free, read-only unit test that
-enumerates `<repo-root>/skills/*/SKILL.md` and locks the contract:
+enumerates every `skills/*/` directory and validates its `SKILL.md`, locking
+the contract:
 
 - frontmatter opens with `---` on line 1 and closes with a later standalone `---`;
 - `name:` exists, is non-empty, and equals the skill directory basename;
 - `description:` exists and is non-empty (inline scalar OR a YAML block scalar
-  `>` / `|` with at least one non-blank continuation line).
+  `>` / `|` with at least one non-blank body line before the block ends at the
+  next dedented line).
 
 Test runner: `bash tests/unit/test-skills-frontmatter.sh`
 (auto-discovered by `tests/run-unit-tests.sh` via the `tests/unit/test-*.sh`
@@ -28,11 +30,11 @@ interface or user flow to exercise end-to-end.
 
 | ID | Scenario | Expected |
 |----|----------|----------|
-| TC-SKILLFM-001 | the 5 registered skill directories exist (`MergeMill-common`, `MergeMill-dev`, `MergeMill-dispatcher`, `MergeMill-review`, `create-issue`) | all present |
+| TC-SKILLFM-001 | the registered skill directories back the shipped set (`MergeMill-common`, `MergeMill-dev`, `MergeMill-dispatcher`, `MergeMill-review`, `create-issue`) — an anti-vacuity guard so a mass deletion can't let enumeration pass on an empty set (list to be extended when a skill is added) | all present |
 | TC-SKILLFM-002 | every discovered `skills/*/SKILL.md` opens with `---` and has a closing `---` | PASS per skill |
 | TC-SKILLFM-003 | every discovered `skills/*/SKILL.md` has a non-empty `name:` equal to its directory basename | PASS per skill |
 | TC-SKILLFM-004 | every discovered `skills/*/SKILL.md` has a non-empty `description:` | PASS per skill |
-| TC-SKILLFM-005 | every discovered skill directory validates (aggregate rc 0) | PASS |
+| TC-SKILLFM-005 | overall exit code is 0 when every per-skill assertion passed (derived from the `FAIL` counter, not a separate directory-level assertion) | exit 0 |
 
 ## Negative scenarios (mktemp-scoped fixtures)
 
@@ -47,15 +49,23 @@ non-zero, with the expected failing assertion named in its output.
 | TC-SKILLFM-102 | frontmatter `name:` set to a value != directory basename | validator rc != 0, fails the name assertion |
 | TC-SKILLFM-103 | frontmatter `description:` with an empty inline value | validator rc != 0, fails the description assertion |
 | TC-SKILLFM-104 | frontmatter `description: >` block indicator with a blank body | validator rc != 0, fails the description assertion |
+| TC-SKILLFM-105 | `description: >` with an empty body immediately followed by an indented sibling key (mirrors the `hooks:` layout in `skills/MergeMill-review/SKILL.md`) | validator rc != 0, fails the description assertion |
+| TC-SKILLFM-106 | a skill directory containing no `SKILL.md` at all | validator rc != 0, fails the `SKILL.md exists` assertion |
 
-TC-SKILLFM-104 specifically guards the subtle path the real skills exercise:
-all 5 shipped skills use a `>` folded block scalar, so a naive parser that
-treats the bare `>` indicator as "non-empty" would pass both the real tree AND
-a plain empty-`description:` fixture. Only the empty-block fixture catches it.
+TC-SKILLFM-104 and TC-SKILLFM-105 together guard the block-scalar path the
+real tree exercises. Every shipped skill uses a `>` folded scalar, so a
+simplistic parser that accepts a bare `>` indicator as "non-empty" accepts the
+real tree *and* the TC-SKILLFM-104 fixture while still rejecting the
+TC-SKILLFM-103 inline-empty fixture — only TC-SKILLFM-104 discriminates that
+parser. TC-SKILLFM-105 additionally pins the block-scalar *boundary*: a parser
+that keeps scanning past a dedented `hooks:` line and counts its indented
+children as description body wrongly accepts an empty description (verified:
+the pre-fix parser returned rc 0 on this fixture; the fix returns rc 1).
 
 ## Test cases document checklist
 
-- [x] Scenarios for existing 5 skills passing (TC-SKILLFM-001..005)
+- [x] Scenarios for existing skills passing (TC-SKILLFM-001..005)
 - [x] Missing-frontmatter fixture fails (TC-SKILLFM-101)
 - [x] Name/directory mismatch fixture fails (TC-SKILLFM-102)
-- [x] Empty-description fixtures fail (TC-SKILLFM-103, TC-SKILLFM-104)
+- [x] Empty-description fixtures fail (TC-SKILLFM-103, TC-SKILLFM-104, TC-SKILLFM-105)
+- [x] Missing-`SKILL.md` fixture fails (TC-SKILLFM-106)
