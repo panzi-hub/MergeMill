@@ -20,7 +20,7 @@
 
 MergeMill 是一个自动化开发流水线，将 Issue 转化为 Pull Request，并按仓库策略完成审查与合并。合并审批受平台权限约束：例如 GitHub 不允许 PR 作者批准自己的 PR，因此需要其他有权限的 reviewer 或配置允许的合并流程。
 
-它会扫描带有 `MergeMill` 标签的 Issue，调度一个 **Dev Agent（开发 Agent）** 在隔离的 worktree 中通过 TDD（测试驱动开发）实现功能，然后移交给 **Review Agent（审查 Agent）** 进行代码审查和可选的 E2E 验证。整个循环按 cron 定时无人值守运行。
+它会扫描带有 `MergeMill` 标签的 Issue，调度一个 **Dev Agent（开发 Agent）** 在隔离的 worktree 中通过 TDD（测试驱动开发）实现功能，然后移交给 **Review Agent（审查 Agent）** 进行代码审查和可选的 E2E 验证。整个循环由 macOS launchd 每 300 秒无人值守调用。
 
 ### 特性
 
@@ -45,7 +45,7 @@ npx skills add panzi-hub/MergeMill
 |-------|------|
 | **MergeMill-dev** | TDD 工作流：git worktree 隔离、设计画布、测试优先开发、代码审查、CI 验证 |
 | **MergeMill-review** | PR 代码审查：检查清单验证、合并冲突解决、E2E 测试、自动合并 |
-| **MergeMill-dispatcher** | Issue 扫描器，按 cron 定时调度开发和审查 Agent |
+| **MergeMill-dispatcher** | Issue 扫描器，由 macOS launchd 每 300 秒调度开发和审查 Agent |
 | **MergeMill-common** | 共享的工作流强制 hooks 和 Agent 可调用的工具脚本 |
 | **create-issue** | 结构化 Issue 创建器：模板、MergeMill 标签指导、工作区变更附件 |
 
@@ -57,8 +57,8 @@ cd my-project
 cp scripts/MergeMill.conf.example scripts/MergeMill.conf
 # 编辑 MergeMill.conf 填入项目配置
 ( source scripts/MergeMill.conf && bash scripts/setup-labels.sh "$REPO" )
-# 启动调度器
-*/5 * * * * cd /path/to/project && bash skills/MergeMill-dispatcher/scripts/dispatcher-tick.sh
+# 安装唯一的调度时钟（macOS launchd，每 300 秒）
+bash scripts/install-dispatcher-timer.sh
 ```
 
 ### 工作原理
@@ -67,13 +67,13 @@ cp scripts/MergeMill.conf.example scripts/MergeMill.conf
 Issue（MergeMill 标签）
    │
    ▼
-Dispatcher（cron tick）──▶ Dev Agent ──────────▶ Review Agent
+Dispatcher（launchd tick）──▶ Dev Agent ──────────▶ Review Agent
    扫描 + 调度               worktree + TDD       查找 PR + 审查
    并发控制 + 重试           实现 + 测试           可选 E2E 验证
                             创建 PR               审批 + 合并
 ```
 
-Issue 通过 dispatcher 和 Agent 协作管理标签流转。Dispatcher 按 cron 轮询；标签是兼容状态投影，运行记录和迁移事件用于诊断。Agent 完成结果统一写入 `agent-result.json`，包含退出码和失败分类：
+Issue 通过 dispatcher 和 Agent 协作管理标签流转。Dispatcher 由 launchd 每 300 秒调用一次；标签是兼容状态投影，运行记录和迁移事件用于诊断。Agent 完成结果统一写入 `agent-result.json`，包含退出码和失败分类：
 
 ```
 MergeMill → in-progress → pending-review → reviewing → approved（审查/合并完成）
@@ -108,7 +108,7 @@ MergeMill → in-progress → pending-review → reviewing → approved（审查
 
 MergeMill is an automated development pipeline that turns Issues into Pull Requests and completes review/merge according to repository policy. Platform permissions still apply: for example, GitHub does not allow a PR author to approve their own PR, so another authorized reviewer or an allowed merge path may be required.
 
-It scans Issues labeled `MergeMill`, dispatches a **Dev Agent** to implement features through TDD in isolated worktrees, then hands off to a **Review Agent** for code review and optional E2E verification. The entire cycle runs unattended on a cron schedule.
+It scans Issues labeled `MergeMill`, dispatches a **Dev Agent** to implement features through TDD in isolated worktrees, then hands off to a **Review Agent** for code review and optional E2E verification. The entire cycle is invoked unattended by a macOS launchd agent every 300 seconds.
 
 ### Features
 
@@ -133,7 +133,7 @@ npx skills add panzi-hub/MergeMill
 |-------|-------------|
 | **MergeMill-dev** | TDD workflow: git worktree isolation, design canvas, test-first development, code review, CI verification |
 | **MergeMill-review** | PR code review: checklist verification, merge conflict resolution, E2E testing, auto-merge |
-| **MergeMill-dispatcher** | Issue scanner that dispatches dev/review agents on a cron schedule |
+| **MergeMill-dispatcher** | Issue scanner dispatched by a macOS launchd agent every 300 seconds |
 | **MergeMill-common** | Shared workflow enforcement hooks and agent-callable utility scripts |
 | **create-issue** | Structured issue creator: templates, MergeMill label guidance, workspace change attachment |
 
@@ -145,8 +145,8 @@ cd my-project
 cp scripts/MergeMill.conf.example scripts/MergeMill.conf
 # Edit MergeMill.conf with your project settings
 ( source scripts/MergeMill.conf && bash scripts/setup-labels.sh "$REPO" )
-# Start the dispatcher
-*/5 * * * * cd /path/to/project && bash skills/MergeMill-dispatcher/scripts/dispatcher-tick.sh
+# Install the only dispatcher clock (macOS launchd, every 300s)
+bash scripts/install-dispatcher-timer.sh
 ```
 
 ### How It Works
@@ -155,13 +155,13 @@ cp scripts/MergeMill.conf.example scripts/MergeMill.conf
 Issue (MergeMill label)
    │
    ▼
-Dispatcher (cron tick)──▶ Dev Agent ──────────▶ Review Agent
+Dispatcher (launchd tick)──▶ Dev Agent ──────────▶ Review Agent
    scan + dispatch          worktree + TDD       find PR + review
    concurrency + retry      implement + test     optional E2E verify
                             create PR            approve + merge
 ```
 
-The dispatcher and agents coordinate issue labels. The dispatcher remains cron/poll driven; labels are the backward-compatible state projection, while run records and transition events provide diagnostics. Agent completion is normalized in `agent-result.json` with an exit code and failure class:
+The dispatcher and agents coordinate issue labels. The dispatcher is invoked by launchd every 300 seconds; labels are the backward-compatible state projection, while run records and transition events provide diagnostics. Agent completion is normalized in `agent-result.json` with an exit code and failure class:
 
 ```
 MergeMill → in-progress → pending-review → reviewing → approved (review/merge complete)
@@ -196,7 +196,7 @@ Failure classes: transient / agent / code / policy / configuration. They are rec
 
 MergeMill（マージミル）は、Issue から Pull Request までの開発を自動化し、リポジトリのポリシーに従ってレビューとマージを進めるパイプラインです。プラットフォームの権限規則は適用されます。たとえば GitHub では PR 作成者自身は承認できないため、別の権限を持つ reviewer、または許可されたマージ手順が必要な場合があります。
 
-`MergeMill` ラベルが付いた Issue をスキャンし、**Dev Agent（開発エージェント）** を隔離された worktree にディスパッチして TDD（テスト駆動開発）で機能を実装、その後 **Review Agent（レビューエージェント）** に引き継いでコードレビューとオプションの E2E 検証を行います。全サイクルは cron スケジュールで無人実行されます。
+`MergeMill` ラベルが付いた Issue をスキャンし、**Dev Agent（開発エージェント）** を隔離された worktree にディスパッチして TDD（テスト駆動開発）で機能を実装、その後 **Review Agent（レビューエージェント）** に引き継いでコードレビューとオプションの E2E 検証を行います。全サイクルは macOS launchd が 300 秒ごとに無人実行します。
 
 ### 主な機能
 
@@ -221,7 +221,7 @@ npx skills add panzi-hub/MergeMill
 |-------|------|
 | **MergeMill-dev** | TDD ワークフロー：git worktree 隔離、デザインキャンバス、テストファースト開発、コードレビュー、CI 検証 |
 | **MergeMill-review** | PR コードレビュー：チェックリスト検証、マージコンフリクト解決、E2E テスト、自動マージ |
-| **MergeMill-dispatcher** | Issue スキャナー、cron で開発・レビューエージェントを定期的にディスパッチ |
+| **MergeMill-dispatcher** | Issue スキャナー。macOS launchd が 300 秒ごとに開発・レビューエージェントをディスパッチ |
 | **MergeMill-common** | 共有ワークフロー強制フックとエージェント呼び出し可能なユーティリティスクリプト |
 | **create-issue** | 構造化 Issue 作成：テンプレート、MergeMill ラベルガイダンス、ワークスペース変更添付 |
 
@@ -233,8 +233,8 @@ cd my-project
 cp scripts/MergeMill.conf.example scripts/MergeMill.conf
 # MergeMill.conf をプロジェクト設定で編集
 ( source scripts/MergeMill.conf && bash scripts/setup-labels.sh "$REPO" )
-# ディスパッチャーを起動
-*/5 * * * * cd /path/to/project && bash skills/MergeMill-dispatcher/scripts/dispatcher-tick.sh
+# 唯一のディスパッチャークロックをインストール（macOS launchd、300 秒ごと）
+bash scripts/install-dispatcher-timer.sh
 ```
 
 ### 仕組み
@@ -243,13 +243,13 @@ cp scripts/MergeMill.conf.example scripts/MergeMill.conf
 Issue（MergeMill ラベル）
    │
    ▼
-Dispatcher（cron tick）──▶ Dev Agent ──────────▶ Review Agent
+Dispatcher（launchd tick）──▶ Dev Agent ──────────▶ Review Agent
    スキャン + ディスパッチ   worktree + TDD       PR 検出 + レビュー
    並列制御 + リトライ       実装 + テスト         オプション E2E 検証
                              PR 作成               承認 + マージ
 ```
 
-Issue のラベル遷移は dispatcher と Agent が協調して管理します。dispatcher は cron によるポーリングを継続し、ラベルを後方互換の状態投影として使用します。実行記録と遷移イベントは診断用です。Agent の完了結果は終了コードと失敗分類を含む `agent-result.json` に統一されます：
+Issue のラベル遷移は dispatcher と Agent が協調して管理します。dispatcher は launchd が 300 秒ごとに呼び出し、ラベルを後方互換の状態投影として使用します。実行記録と遷移イベントは診断用です。Agent の完了結果は終了コードと失敗分類を含む `agent-result.json` に統一されます：
 
 ```
 MergeMill → in-progress → pending-review → reviewing → approved（レビュー/マージ完了）

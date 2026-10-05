@@ -2,8 +2,8 @@
 name: MergeMill-dispatcher
 description: >
   Use when running, configuring, or troubleshooting the MergeMill
-  dispatcher cron. Triggers on phrases like "run the dispatcher", "scan for
-  pending issues", "dispatch MergeMill tasks", "set up the dispatch cron",
+  dispatcher clock. Triggers on phrases like "run the dispatcher", "scan for
+  pending issues", "dispatch MergeMill tasks", "set up the launchd timer",
   "configure dispatcher.conf", "set up multi-project dispatcher", "dispatch
   to a remote dev box via SSM", "EXECUTION_BACKEND=remote-aws-ssm",
   "stale agent detection", or working on dispatcher-tick.sh /
@@ -15,7 +15,7 @@ description: >
 
 # 自主开发团队 Dispatcher
 
-扫描 GitHub Issue 并调度 dev/review 任务。一次 cron tick 是 `dispatcher-tick.sh`（单项目）或 `dispatcher-multi-tick.sh`（多项目）的一次调用。完整的状态机、每步语义和不变量见[源码仓库的 `docs/pipeline/`](https://github.com/panzi-hub/MergeMill/tree/main/docs/pipeline)——那是规范；本文件是 Agent 的调用契约。
+扫描 GitHub Issue 并调度 dev/review 任务。一次 tick 是 `dispatcher-tick.sh`（单项目）或 `dispatcher-multi-tick.sh`（多项目）的一次调用。时钟只有 macOS launchd，由 `install-dispatcher-timer.sh` 安装；不要配置 cron 或 OpenClaw。完整的状态机、每步语义和不变量见[源码仓库的 `docs/pipeline/`](https://github.com/panzi-hub/MergeMill/tree/main/docs/pipeline)——那是规范；本文件是 Agent 的调用契约。
 
 ## 前置条件
 
@@ -28,7 +28,7 @@ description: >
 
 ## 做什么
 
-当 cron 触发时（默认：每 5 分钟），运行**以下之一**：
+当 launchd 触发时（每 300 秒），运行**以下之一**：
 
 **单项目部署**（每个 Dispatcher 一个仓库）：
 
@@ -36,7 +36,7 @@ description: >
 bash "$PROJECT_DIR/scripts/dispatcher-tick.sh"
 ```
 
-**多项目部署**（一个 cron 任务，多个仓库——关闭 #62）：
+**多项目部署**（一个 launchd agent，多个仓库——关闭 #62）：
 
 ```bash
 DISPATCHER_CONF="$HOME/.MergeMill/dispatcher.conf" \
@@ -118,16 +118,15 @@ Dispatcher 是一个标签和进程生成的协调者，不是代码变更者：
 - `DISPATCHER_APP_ID`：dispatcher bot 的 GitHub App ID
 - `DISPATCHER_APP_PEM`：GitHub App 私钥 PEM 文件路径
 
-## Cron 配置（OpenClaw）
+## 时钟（launchd）
+
+唯一的安装方式：
 
 ```bash
-openclaw cron add \
-  --name "MergeMill Dispatcher" \
-  --cron "*/5 * * * *" \
-  --session isolated \
-  --message "Run the MergeMill-dispatcher skill. Check GitHub issues and dispatch tasks." \
-  --announce
+bash scripts/install-dispatcher-timer.sh
 ```
+
+这会安装 `com.mergemill.dispatcher`，每 300 秒运行一次 `dispatcher-tick.sh`。没有 cron 或 OpenClaw 选项。非 macOS 直接失败。
 
 ## 标签定义
 
