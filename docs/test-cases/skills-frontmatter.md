@@ -49,7 +49,7 @@ non-zero, with the expected failing assertion named in its output.
 | TC-SKILLFM-102 | frontmatter `name:` set to a value != directory basename | validator rc != 0, fails the name assertion |
 | TC-SKILLFM-103 | frontmatter `description:` with an empty inline value | validator rc != 0, fails the description assertion |
 | TC-SKILLFM-104 | frontmatter `description: >` block indicator with a blank body | validator rc != 0, fails the description assertion |
-| TC-SKILLFM-105 | `description: >` with an empty body immediately followed by an indented sibling key (mirrors the `hooks:` layout in `skills/MergeMill-review/SKILL.md`) | validator rc != 0, fails the description assertion |
+| TC-SKILLFM-105 | `description: >` with an empty body immediately followed by a sibling key whose children are indented (mirrors the `hooks:` layout in `skills/MergeMill-review/SKILL.md`) | validator rc != 0, fails the description assertion |
 | TC-SKILLFM-106 | a skill directory containing no `SKILL.md` at all | validator rc != 0, fails the `SKILL.md exists` assertion |
 
 TC-SKILLFM-104 and TC-SKILLFM-105 together guard the block-scalar path the
