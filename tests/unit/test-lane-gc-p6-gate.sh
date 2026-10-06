@@ -755,11 +755,15 @@ echo ""
 echo "=== TC-LGC6-130: per-tick-call-site rc matrix (review P1-2) — rc=1 aborts (pre-P6 behavior), rc=75 defers, rc=0 confirms ==="
 # ===========================================================================
 # Each of the 4 dispatcher-tick.sh call sites (Step 2 dev-new, Step 3
-# review, Step 4 PTL dev-new, Step 4 dev-resume) is extracted from its own
-# `_dispatch_rc=0` line through its own `dispatch_marker_confirm_launched`
-# call (inclusive) and driven inside a single-iteration `for` loop (so the
-# extracted block's own `continue` statements are valid) with every
-# dependent function stubbed. Three scenarios per site:
+# review, Step 4 PTL dev-new, Step 4 dev-resume) is located by a unique
+# source needle, then extracted from the preceding `_dispatch_rc=0` through
+# its own `dispatch_marker_confirm_launched` (inclusive). Do not pin absolute
+# line numbers: any insertion above a site shifts them, and a stale number
+# silently extracts the wrong span (the #33 CI failure). A missing or
+# duplicated needle fails the extraction control instead. The block is driven
+# inside a single-iteration `for` loop (so the extracted block's own
+# `continue` statements are valid) with every dependent function stubbed.
+# Three scenarios per site:
 #   rc=1 (a genuine dispatch failure): pre-P6 this call site was a bare,
 #     uncaptured `dispatch ...` under `set -euo pipefail` — any non-zero
 #     return aborted the WHOLE TICK immediately. This PR's fix re-raises
@@ -770,13 +774,47 @@ echo "=== TC-LGC6-130: per-tick-call-site rc matrix (review P1-2) — rc=1 abort
 #     confirm_launched is NOT reached, the harness exits 0 (via `continue`
 #     falling out the bottom of the single-iteration loop).
 #   rc=0 (success): confirm_launched IS reached, harness exits 0.
+# needle must occur exactly once. The rc block is the nearest preceding
+# `_dispatch_rc=0` through the following `dispatch_marker_confirm_launched`.
 _extract_tick_site() {
-  local start_line="$1"
-  awk -v start="$start_line" '
-    NR == start { f = 1 }
-    f { print }
-    f && /dispatch_marker_confirm_launched/ { exit }
+  local needle="$1"
+  awk -v needle="$needle" '
+    { lines[NR] = $0 }
+    index($0, needle) { hits[++nhit] = NR }
+    END {
+      if (nhit != 1) exit 2
+      start = 0
+      for (i = hits[1]; i >= 1; i--) {
+        if (lines[i] ~ /^[[:space:]]*_dispatch_rc=0[[:space:]]*$/) { start = i; break }
+      }
+      if (!start) exit 3
+      for (i = start; i <= NR; i++) {
+        print lines[i]
+        if (i > start && index(lines[i], "dispatch_marker_confirm_launched")) exit 0
+      }
+      exit 4
+    }
   ' "$TICK"
+}
+
+_tick_site_needle() {
+  case "$1" in
+    step2-dev-new)
+      printf '%s\n' 'handle_dispatch_deferred "$issue_num" "dev-new" "in-progress" ""'
+      ;;
+    step3-review)
+      printf '%s\n' 'dispatch review "$issue_num" || _dispatch_rc=$?'
+      ;;
+    step4-ptl-dev-new)
+      printf '%s\n' 'handle_dispatch_deferred "$issue_num" "dev-new" "in-progress" "pending-dev"'
+      ;;
+    step4-dev-resume)
+      printf '%s\n' 'dispatch dev-resume "$issue_num" "$session_id" || _dispatch_rc=$?'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 _run_tick_site_harness() {
@@ -806,20 +844,14 @@ _run_tick_site_harness() {
   return "$hrc"
 }
 
-declare -A TICK_SITES=(
-  ["step2-dev-new"]="448"
-  ["step3-review"]="502"
-  ["step4-ptl-dev-new"]="662"
-  ["step4-dev-resume"]="702"
-)
 for site_label in step2-dev-new step3-review step4-ptl-dev-new step4-dev-resume; do
-  start_line="${TICK_SITES[$site_label]}"
-  SITE_BODY=$(_extract_tick_site "$start_line")
-  if [[ -z "$SITE_BODY" ]] || ! grep -q 'dispatch_marker_confirm_launched' <<<"$SITE_BODY"; then
-    assert_fail "TC-LGC6-130 ($site_label, extraction control): extraction from line $start_line is empty or missing the confirm-launched call — dispatcher-tick.sh structure drifted"
+  needle="$(_tick_site_needle "$site_label")"
+  SITE_BODY="$(_extract_tick_site "$needle" 2>/dev/null || true)"
+  if [[ -z "$SITE_BODY" ]] || ! grep -qF -- "$needle" <<<"$SITE_BODY" || ! grep -q 'dispatch_marker_confirm_launched' <<<"$SITE_BODY"; then
+    assert_fail "TC-LGC6-130 ($site_label, extraction control): needle not found exactly once, or the rc block around it drifted — do not fall back to a line number"
     continue
   fi
-  assert_pass "TC-LGC6-130 ($site_label, extraction control): extracted a non-empty block containing dispatch_marker_confirm_launched"
+  assert_pass "TC-LGC6-130 ($site_label, extraction control): extracted the rc block around its unique needle"
 
   # rc=1: genuine failure — must abort (non-zero exit), confirm NOT reached.
   OUT_RC1=$(_run_tick_site_harness "$SITE_BODY" "" 1 2>&1); RC_RC1=$?

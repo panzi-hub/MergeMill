@@ -148,6 +148,16 @@ _MOCK_ISSUE_LIST="[$(mkissue 403 MergeMill pending-dev)]"
 out=$(list_pending_dev)
 assert_count "TC-PDEV-003 clean pending-dev detected" 1 "$out"
 
+# TC-PDEV-005: pending-dev + reviewing → live review owns the issue
+_MOCK_ISSUE_LIST="[$(mkissue 405 MergeMill pending-dev reviewing)]"
+out=$(list_pending_dev)
+assert_count "TC-PDEV-005 pending-dev+reviewing excluded" 0 "$out"
+
+# TC-PDEV-006: pending-dev + in-progress → live dev owns the issue
+_MOCK_ISSUE_LIST="[$(mkissue 406 MergeMill pending-dev in-progress)]"
+out=$(list_pending_dev)
+assert_count "TC-PDEV-006 pending-dev+in-progress excluded" 0 "$out"
+
 # TC-PDEV-004: mixed bag — only #403-shaped issues survive
 _MOCK_ISSUE_LIST="[$(mkissue 411 MergeMill pending-dev approved),$(mkissue 412 MergeMill pending-dev stalled),$(mkissue 413 MergeMill pending-dev)]"
 out=$(list_pending_dev)

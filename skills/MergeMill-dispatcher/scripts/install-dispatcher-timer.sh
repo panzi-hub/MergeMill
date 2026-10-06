@@ -153,6 +153,8 @@ cat > "$PLIST" <<PLIST
   <integer>${INTERVAL}</integer>
   <key>RunAtLoad</key>
   <false/>
+  <key>AbandonProcessGroup</key>
+  <true/>
   <key>StandardOutPath</key>
   <string>${LOG_XML}</string>
   <key>StandardErrorPath</key>

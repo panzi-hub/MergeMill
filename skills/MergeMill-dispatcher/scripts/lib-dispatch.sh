@@ -202,6 +202,11 @@ list_pending_review() {
 # trigger Step 4's `pending-dev → in-progress` swap and spawn dev-resume
 # against an approved issue — the actual mechanism behind the wedge that
 # motivated this issue.
+#
+# Active-label subtraction (`reviewing`, `in-progress`): a live wrapper owns
+# the issue. A stale `pending-dev` left beside `reviewing` must not re-enter
+# Step 4 and flip the issue back to `pending-review` while the review is
+# running (the #27/#28 same-tick label fight).
 list_pending_dev() {
   # [INV-87]/[W1a, #371] leaf via the ABSTRACT itp_list_by_state contract. The
   # fields=number,labels,comments field set (comments is the [INV-90]
@@ -211,7 +216,9 @@ list_pending_dev() {
   # subtraction.
   itp_list_by_state open "MergeMill,pending-dev" "${ISSUE_SCAN_LIMIT:-100}" "$(issue_filter_fields "number,labels,comments")" | jq '[.[] | select(
     (.labels | any(. == "approved") | not) and
-    (.labels | any(. == "stalled") | not)
+    (.labels | any(. == "stalled") | not) and
+    (.labels | any(. == "reviewing") | not) and
+    (.labels | any(. == "in-progress") | not)
   )]' | issue_filter_apply
 }
 
