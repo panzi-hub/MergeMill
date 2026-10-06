@@ -121,6 +121,57 @@ source "${LIB_DIR}/lib-auth.sh"
 
 log() { echo "[dispatcher-tick] $(date -u +%H:%M:%S) $*"; }
 
+# Transient tracker I/O must not fail the launchd job. launchd throttles a
+# non-zero exit, so one GitHub timeout becomes a multi-hour gap. Config
+# errors above this helper still exit non-zero. A failed count is never
+# treated as zero — the caller skips dispatch instead.
+_tick_capture() {
+  local __name="$1"
+  shift
+  local __out __rc __err
+  __err="$(mktemp "${TMPDIR:-/tmp}/mergemill-tick-err.XXXXXX")"
+  set +e
+  __out=$("$@" 2>"$__err")
+  __rc=$?
+  set -e
+  if [[ "$__rc" -ne 0 ]]; then
+    log "  tracker call '$*' failed (rc=$__rc); skipping, next tick retries"
+    if [[ -s "$__err" ]]; then
+      log "  $(head -n 1 "$__err")"
+    fi
+    rm -f "$__err"
+    return 1
+  fi
+  rm -f "$__err"
+  printf -v "$__name" '%s' "$__out"
+  return 0
+}
+
+# List scans must be a JSON array. A transport failure or a non-array body
+# becomes [] so jq 'length' cannot abort the tick under set -e.
+_tick_capture_list() {
+  local __name="$1"
+  shift
+  if ! _tick_capture "$__name" "$@"; then
+    printf -v "$__name" '%s' '[]'
+    return 0
+  fi
+  if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"${!__name}"; then
+    log "  tracker call '$*' returned a non-array; treating as empty"
+    printf -v "$__name" '%s' '[]'
+  fi
+}
+
+# JUST_DISPATCHED is still an array here. was_just_dispatched() reads the
+# space-separated string exported at Step 5, so Step 4 must walk the array.
+_dispatched_this_tick() {
+  local n="$1" jd
+  for jd in "${JUST_DISPATCHED[@]:-}"; do
+    [[ "$jd" == "$n" ]] && return 0
+  done
+  return 1
+}
+
 # Validate EXECUTION_BACKEND ONCE upfront, before any label transitions.
 # H1 (PR-9 review): if dispatch() returned 1 from inside a step body, the
 # step had already swapped the issue's label to in-progress and posted a
@@ -336,12 +387,17 @@ fi
 # misclassify on the next tick. Pure label edits — no agent dispatch,
 # no retry counting.
 log "Step 0: scanning for terminal-label residue..."
-run_hygiene_pass
+if ! run_hygiene_pass; then
+  log "  hygiene pass failed (tracker I/O); continuing, next tick retries"
+fi
 
 # ---------------------------------------------------------------------------
 # Step 1: Concurrency gate
 # ---------------------------------------------------------------------------
-ACTIVE=$(count_active)
+if ! _tick_capture ACTIVE count_active || ! [[ "$ACTIVE" =~ ^[0-9]+$ ]]; then
+  log "Concurrency count unavailable. Skipping dispatch this tick."
+  exit 0
+fi
 if [ "$ACTIVE" -ge "$MAX_CONCURRENT" ]; then
   log "Concurrency limit reached ($ACTIVE/$MAX_CONCURRENT). Aborting tick."
   exit 0
@@ -351,7 +407,7 @@ fi
 # Step 2: scan-new
 # ---------------------------------------------------------------------------
 log "Step 2: scanning for new MergeMill issues..."
-new_issues=$(list_new_issues)
+_tick_capture_list new_issues list_new_issues
 new_count=$(jq 'length' <<<"$new_issues")
 log "  found $new_count new issue(s)"
 
@@ -464,7 +520,7 @@ done
 # Step 3: scan-pending-review
 # ---------------------------------------------------------------------------
 log "Step 3: scanning for issues pending review..."
-pending_review=$(list_pending_review)
+_tick_capture_list pending_review list_pending_review
 pr_count=$(jq 'length' <<<"$pending_review")
 log "  found $pr_count pending-review issue(s)"
 
@@ -517,7 +573,7 @@ fi
 # Step 4: scan-pending-dev (resume)
 # ---------------------------------------------------------------------------
 log "Step 4: scanning for issues pending dev resume..."
-pending_dev=$(list_pending_dev)
+_tick_capture_list pending_dev list_pending_dev
 pd_count=$(jq 'length' <<<"$pending_dev")
 log "  found $pd_count pending-dev issue(s)"
 
@@ -531,6 +587,12 @@ for ((i = 0; i < pd_count; i++)); do
   fi
 
   issue_num=$(jq -r ".[$i].number" <<<"$pending_dev")
+  # Same tick may have just moved this issue to reviewing (Step 3) while a
+  # stale pending-dev label is still on the snapshot. Do not flip it back.
+  if _dispatched_this_tick "$issue_num"; then
+    log "  issue #${issue_num} just dispatched this tick — skipping pending-dev"
+    continue
+  fi
 
   retry_count=$(count_retries "$issue_num")
   if [ "$retry_count" -ge "$MAX_RETRIES" ]; then
@@ -722,7 +784,7 @@ log "Step 5: stale detection..."
 JUST_DISPATCHED_STR="${JUST_DISPATCHED[*]:-}"
 export JUST_DISPATCHED="$JUST_DISPATCHED_STR"
 
-candidates=$(list_stale_candidates)
+_tick_capture_list candidates list_stale_candidates
 cand_count=$(jq 'length' <<<"$candidates")
 log "  $cand_count active issue(s) to evaluate"
 

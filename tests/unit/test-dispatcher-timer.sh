@@ -72,6 +72,11 @@ if [[ -f "$PLIST" ]] && grep -q '<string>com.mergemill.dispatcher</string>' "$PL
 else
   assert_fail "plist missing required clock contract"
 fi
+if [[ -f "$PLIST" ]] && grep -q '<key>AbandonProcessGroup</key>' "$PLIST" && grep -A1 '<key>AbandonProcessGroup</key>' "$PLIST" | grep -q '<true/>'; then
+  assert_pass "plist abandons the process group so tick exit does not kill wrappers"
+else
+  assert_fail "plist missing AbandonProcessGroup"
+fi
 if grep -q 'bootstrap gui/' "$LAUNCHCTL_LOG"; then
   assert_pass "installer bootstraps the gui domain"
 else
