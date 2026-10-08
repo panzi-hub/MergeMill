@@ -6844,7 +6844,7 @@ _Triage (issue #236): [machine-checked: tests/unit/test-dispatcher-step3-empty-s
 
 ## INV-127: the webhook wake kicks the same dispatcher-tick.sh entry point and never becomes a second scheduler
 
-_Triage (issue #35): [machine-checked: tests/unit/test-dispatcher-wake.sh]_
+_Triage (issue #236): [machine-checked: tests/unit/test-dispatcher-wake.sh]_
 
 **Rule**:
 
