@@ -22,6 +22,12 @@ MergeMill 是一个只支持 macOS 的自动化开发流水线，将 Issue 转�
 
 它会扫描带有 `MergeMill` 标签的 Issue，调度一个 **Dev Agent（开发 Agent）** 在隔离的 worktree 中通过 TDD（测试驱动开发）实现功能，然后移交给 **Review Agent（审查 Agent）** 进行代码审查和可选的 E2E 验证。整个循环由 macOS launchd 每 300 秒无人值守调用。
 
+### 当前范围
+
+这一版足够在一台醒着的 Mac 上无人值守地跑通 Issue 到合并。每一轮 tick 会扫完所有匹配的 Issue，同时运行的 Agent 默认不超过 5 个（`MAX_CONCURRENT`）；每张 Issue 有自己的 worktree。安装器会写入 `AbandonProcessGroup`，tick 结束不会杀掉已经拉起的开发或审查进程。GitHub 读超时只跳过这一步扫描，tick 仍以 0 退出，launchd 不会因此推迟后面的调度。
+
+还不是完成品。其他操作系统留到后续版本。Mac 睡眠时不会 tick。审查如果卡在 fan-out，观察循环最多等到 6 小时。一轮 tick 中途的 GitHub 写操作失败，仍可能中止这一轮。
+
 ### 特性
 
 - **自动化开发闭环**：Issue 扫描、Agent 开发与审查、按仓库规则处理合并；可能需要人工审批
@@ -110,6 +116,12 @@ MergeMill is an automated development pipeline that turns Issues into Pull Reque
 
 It scans Issues labeled `MergeMill`, dispatches a **Dev Agent** to implement features through TDD in isolated worktrees, then hands off to a **Review Agent** for code review and optional E2E verification. The entire cycle is invoked unattended by a macOS launchd agent every 300 seconds.
 
+### Current scope
+
+This version is enough to run issue-to-merge unattended on one awake Mac. Each tick walks every matching issue, with at most 5 agents running at once by default (`MAX_CONCURRENT`). Each issue gets its own worktree. The installer sets `AbandonProcessGroup`, so a finished tick does not kill the dev or review processes it just started. A GitHub read timeout skips that scan and the tick still exits 0, so launchd does not delay later ticks.
+
+It is not a finished product. Other operating systems belong in later releases. A sleeping Mac does not tick. If review stalls in fan-out, the observe loop waits up to 6 hours. A GitHub write that fails in the middle of a tick can still abort that tick.
+
 ### Features
 
 - **Automated development loop**: issue scanning, agent implementation and review, with merge behavior governed by repository policy; human approval may be required
@@ -197,6 +209,12 @@ Failure classes: transient / agent / code / policy / configuration. They are rec
 MergeMill（マージミル）は、Issue から Pull Request までの開発を自動化し、リポジトリのポリシーに従ってレビューとマージを進めるパイプラインです。プラットフォームの権限規則は適用されます。たとえば GitHub では PR 作成者自身は承認できないため、別の権限を持つ reviewer、または許可されたマージ手順が必要な場合があります。
 
 `MergeMill` ラベルが付いた Issue をスキャンし、**Dev Agent（開発エージェント）** を隔離された worktree にディスパッチして TDD（テスト駆動開発）で機能を実装、その後 **Review Agent（レビューエージェント）** に引き継いでコードレビューとオプションの E2E 検証を行います。全サイクルは macOS launchd が 300 秒ごとに無人実行します。
+
+### 現在の範囲
+
+この版は、起動している 1 台の Mac で Issue からマージまでを無人で回すのに足ります。1 回の tick は一致する Issue をすべて走査し、同時に動く Agent は既定で 5 個までです（`MAX_CONCURRENT`）。Issue ごとに worktree は分かれます。インストーラは `AbandonProcessGroup` を書き込むため、tick が終わっても起動済みの開発・レビュープロセスは殺されません。GitHub の読み取りタイムアウトはそのスキャンだけを飛ばし、tick は 0 で終了します。launchd が後続の起動を遅らせることはありません。
+
+完成品ではありません。他の OS は後続バージョンです。Mac がスリープ中は tick しません。レビューが fan-out で止まった場合、観察ループは最大 6 時間待ちます。tick の途中で GitHub への書き込みが失敗すると、その tick はまだ中断され得ます。
 
 ### 主な機能
 
