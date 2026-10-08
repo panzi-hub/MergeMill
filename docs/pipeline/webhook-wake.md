@@ -70,7 +70,7 @@ event are ignored.
 ## Coalescing and mutual exclusion
 
 Wake state lives in a private directory (mode 0700), default
-`${XDG_STATE_HOME:-$HOME/.local/state}/mergemill-dispatcher-wake`,
+`${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/mergemill-dispatcher-wake`,
 overridable with `WAKE_STATE_DIR`.
 
 - **Coalesce window.** Deliveries that arrive within `WAKE_WINDOW_SECONDS`
@@ -81,7 +81,10 @@ overridable with `WAKE_STATE_DIR`.
   start a second tick; it requests exactly **one follow-up**, which runs
   after the current tick exits. A tick already running is detected by
   this lock, never by parsing launchd. A lock left by a dead receiver is
-  stolen, so a crashed wake cannot wedge the lane.
+  stolen, so a crashed wake cannot wedge the lane: a dead holder's pid, a
+  lock with no pid recorded (holder died between `mkdir` and the pid
+  write, after a short grace), or a lock older than one hour (PID reuse)
+  is reclaimed. An abort while the lock is held releases it on exit.
 - **Bounded follow-up.** At most one follow-up runs per session; a steady
   stream cannot livelock the wake. Any residual boundary race degrades to
   the launchd backstop (≤ 300 s), never to a wrong action.
@@ -107,6 +110,12 @@ decides *when* the tick runs.
 | `WEBHOOK_SECRET` | HMAC secret for `X-Hub-Signature-256`. Unset ⇒ every delivery is rejected. |
 | `WAKE_STATE_DIR` | Override the state directory (tests). |
 | `WAKE_WINDOW_SECONDS` | Coalesce window in seconds (default 15). |
+| `WAKE_MAX_REQUEST_BYTES` | Largest delivery buffered from stdin (default 1 MiB); larger deliveries are rejected. |
+| `WAKE_LOCK_GRACE_SECONDS` | Grace before an unrecorded lock is stolen (default 5; tests). |
+| `WAKE_LOCK_MAX_AGE_SECONDS` | Age past which a live-looking lock is presumed PID reuse (default 3600). |
+
+The same values can be given on the command line (`--state-dir`,
+`--window-seconds`, `--tick-script`, `-h`).
 
 ## Failure modes
 
@@ -114,6 +123,7 @@ decides *when* the tick runs.
 |-----------|----------|
 | Missing / malformed / mismatched signature | exit 3, no tick, logged |
 | Secret unset | exit 3, no tick (fail closed) |
-| `REPO` unset, `jq` or `openssl` missing, state dir unwritable | exit 5, no tick, logged |
+| Delivery larger than `WAKE_MAX_REQUEST_BYTES` | exit 3, no tick, logged |
+| `REPO` unset, `jq`/`openssl` missing, state dir unwritable, bad numeric config | exit 5, no tick, logged |
 | Repository or event not dispatchable | exit 0, no tick (handled, no retry) |
 | Tick already running | exit 0, one follow-up requested |

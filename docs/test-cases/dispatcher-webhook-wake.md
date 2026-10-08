@@ -27,9 +27,9 @@ concurrently.
 | TC-WHWAKE-003 | `pull_request` `opened` / `synchronize` | each calls the stub once |
 | TC-WHWAKE-004 | `check_run` `completed` / `check_suite` `completed` | each calls the stub once |
 | TC-WHWAKE-010 | Missing `X-Hub-Signature-256` header | zero calls, non-zero rc, log names the rejection |
-| TC-WHWAKE-011 | Signature header present but not `sha256=…` (malformed) | zero calls, non-zero rc |
-| TC-WHWAKE-012 | `sha256=` value that does not match the body (tampered) | zero calls, non-zero rc |
-| TC-WHWAKE-013 | Correct signature but `WEBHOOK_SECRET` unset in conf | zero calls, non-zero rc (fail closed) |
+| TC-WHWAKE-011 | Signature header present but not `sha256=…` (malformed) | zero calls, non-zero rc, log names the rejection |
+| TC-WHWAKE-012 | `sha256=` value that does not match the body (tampered) | zero calls, non-zero rc, log names the rejection |
+| TC-WHWAKE-013 | Correct signature but `WEBHOOK_SECRET` unset in conf | zero calls, non-zero rc, log names the rejection (fail closed) |
 | TC-WHWAKE-020 | Valid signature, `repository.full_name` != `$REPO` | zero calls, rc 0/ignored |
 | TC-WHWAKE-021 | Valid sig, `issues` `labeled` with label `bug` | zero calls |
 | TC-WHWAKE-022 | Valid sig, `issue_comment` `created` (a comment) | zero calls |
@@ -45,13 +45,15 @@ concurrently.
 | TC-WHWAKE-030 | Three accepted deliveries fed back-to-back (well inside `WAKE_WINDOW_SECONDS`) | stub called exactly once total |
 | TC-WHWAKE-031 | A fourth delivery after the window stamp is aged past the window | stub called a second time (window reopens) |
 
-## Running tick — no concurrent start; exactly one follow-up after it exits (AC: occupied lock rejects the concurrent call; release produces exactly one follow-up)
+## Running tick — no concurrent start; exactly one follow-up after it exits (AC: occupied lock rejects the concurrent call; release produces exactly one follow-up; a crashed holder cannot wedge the lane)
 
 | ID | Scenario | Expected |
 |----|----------|----------|
 | TC-WHWAKE-040 | Wake #1 starts a blocking stub tick; wake #2 (a matching delivery) arrives while it runs | wake #2 returns without starting a tick (stub count still 1); it records `pending` |
 | TC-WHWAKE-041 | Wake #1's tick then exits | wake #1 runs exactly one follow-up tick (final count 2), then releases |
 | TC-WHWAKE-042 | Whole 040+041 run | stub's `overlap` marker is empty — never two ticks at once |
+| TC-WHWAKE-043 | A pre-existing lock dir with no `pid` file (holder died between `mkdir` and the write), past the grace | lock is stolen; a matching delivery still ticks once (no permanent wedge) |
+| TC-WHWAKE-044 | A pre-existing lock dir stamped with an already-exited pid | dead holder's lock is stolen; a matching delivery still ticks once |
 
 ## Structural invariants (AC: assert no public bind; launchd not turned into a second clock)
 

@@ -12,6 +12,11 @@
 #   dispatcher-wake.sh [--tick-script PATH] [--state-dir DIR]
 #                      [--window-seconds N] < delivery.http
 #
+#   --tick-script PATH   override the dispatcher-tick.sh to kick (tests)
+#   --state-dir DIR      override the wake state dir (default below; tests)
+#   --window-seconds N   coalesce window in seconds (default 15)
+#   -h, --help           print this usage and exit 0
+#
 # Input: ONE raw HTTP delivery (request line + headers + blank line + body)
 # on stdin. The receiver opens NO socket — a loopback listener/tunnel
 # (Tailscale, SSH, a self-hosted runner, a test harness) is the operator's
@@ -20,7 +25,7 @@
 # Config: REPO and WEBHOOK_SECRET via load_MergeMill_conf (lib-config.sh),
 # the same resolution the tick uses. Unset WEBHOOK_SECRET fails closed.
 #
-# Exit codes: 0 accepted / coalesced / deferred (no retry needed);
+# Exit codes: 0 accepted / coalesced / deferred / ignored (no retry needed);
 #             3 rejected (missing, malformed, or mismatched signature, or
 #               no configured secret); 5 environment/config error.
 #
@@ -46,6 +51,15 @@ LIB_DIR="$(cd "$(dirname "$_REAL_SELF")" && pwd)"
 # to via the project-side symlink ([INV-14]). Overridable for tests.
 TICK_SCRIPT="${LIB_DIR}/dispatcher-tick.sh"
 WINDOW_SECONDS="${WAKE_WINDOW_SECONDS:-15}"
+# A not-yet-stamped lock is only stolen after this grace, so we never race a
+# live holder between mkdir and its pid write; a lock whose live pid has
+# outlived the max age is presumed PID reuse and stolen.
+LOCK_GRACE_SECONDS="${WAKE_LOCK_GRACE_SECONDS:-5}"
+LOCK_MAX_AGE_SECONDS="${WAKE_LOCK_MAX_AGE_SECONDS:-3600}"
+# Cap the delivery buffered from stdin so an unbounded feed cannot exhaust
+# disk/memory. Exceeding it rejects the delivery — never a partial verify.
+MAX_REQUEST_BYTES="${WAKE_MAX_REQUEST_BYTES:-1048576}"
+_LOCK_HELD=0
 STATE_DIR=""
 
 log() { echo "[dispatcher-wake] $(date -u +%H:%M:%S) $*" >&2; }
@@ -79,6 +93,17 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# The window may come from the env default (not the flag), so validate it
+# here too: a non-numeric window would silently break coalescing.
+if [[ ! "$WINDOW_SECONDS" =~ ^[0-9]+$ ]]; then
+  log "WAKE_WINDOW_SECONDS must be a non-negative integer (got '${WINDOW_SECONDS}')"
+  exit 5
+fi
+if [[ ! "$MAX_REQUEST_BYTES" =~ ^[0-9]+$ ]]; then
+  log "WAKE_MAX_REQUEST_BYTES must be a non-negative integer (got '${MAX_REQUEST_BYTES}')"
+  exit 5
+fi
+
 if [[ -z "$STATE_DIR" ]]; then
   STATE_DIR="${WAKE_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/mergemill-dispatcher-wake}"
 fi
@@ -91,28 +116,68 @@ WINDOW_FILE="${STATE_DIR}/window.stamp"
 # tick is already running" is detected (not by parsing launchd). A dead
 # holder's lock is stolen so a crashed wake cannot wedge the lane.
 # ---------------------------------------------------------------------------
-# _take_lock — create the lock dir and record our pid; false if it exists.
+# _take_lock — create the lock dir and record our pid; false if it exists or
+# if we cannot stamp the pid (never keep a lock we cannot later attribute).
 _take_lock() {
   mkdir "$LOCK_DIR" 2>/dev/null || return 1
-  printf '%s\n' "$$" > "$LOCK_DIR/pid"
+  if ! printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null; then
+    rm -rf "$LOCK_DIR"
+    return 1
+  fi
+  _LOCK_HELD=1
   return 0
+}
+
+# _lock_age — whole seconds since the lock dir was created, or "" if unknown.
+_lock_age() {
+  local mtime="" now="" age=""
+  mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo "")"
+  [[ "$mtime" =~ ^[0-9]+$ ]] || return 0
+  now="$(date +%s)" || return 0
+  age=$(( now - mtime ))
+  (( age < 0 )) && age=0
+  printf '%s\n' "$age"
+}
+
+# _lock_stale — true when the held lock may be stolen. A numeric pid that is
+# gone is a dead holder; a lock with no usable pid is a holder that died
+# between mkdir and the pid write (stolen only after LOCK_GRACE_SECONDS, so a
+# live holder mid-create is never raced); a still-live pid whose lock has
+# outlived LOCK_MAX_AGE_SECONDS is presumed PID reuse.
+_lock_stale() {
+  local holder="" age=""
+  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")"
+  if [[ "$holder" =~ ^[0-9]+$ ]] && ! kill -0 "$holder" 2>/dev/null; then
+    return 0
+  fi
+  age="$(_lock_age)"
+  [[ "$age" =~ ^[0-9]+$ ]] || return 1
+  if [[ "$holder" =~ ^[0-9]+$ ]]; then
+    [[ "$age" -ge "$LOCK_MAX_AGE_SECONDS" ]] && return 0
+    return 1
+  fi
+  [[ "$age" -ge "$LOCK_GRACE_SECONDS" ]] && return 0
+  return 1
 }
 
 acquire_lock() {
   _take_lock && return 0
   local holder=""
   holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")"
-  # Steal the lock only from a dead holder, so a crashed wake cannot wedge
-  # the lane forever.
-  if [[ "$holder" =~ ^[0-9]+$ ]] && ! kill -0 "$holder" 2>/dev/null; then
-    log "stealing stale wake lock held by dead pid ${holder}"
+  # Steal a lock whose holder is dead (or unrecorded past the grace, or
+  # presumed PID reuse), so a crashed wake cannot wedge the lane forever.
+  if _lock_stale; then
+    log "stealing stale wake lock (holder=${holder:-<none>})"
     rm -rf "$LOCK_DIR"
+    # A holder that died mid-session may have left a follow-up request that
+    # nothing will consume; drop it so it cannot force a later tick.
+    rm -f "$PENDING_FILE"
     _take_lock && return 0
   fi
   return 1
 }
 
-release_lock() { rm -rf "$LOCK_DIR"; }
+release_lock() { rm -rf "$LOCK_DIR"; _LOCK_HELD=0; }
 
 # window_fresh <now> — true while an accepted delivery's coalesce window is
 # open, i.e. a tick has already been (or is being) run for this burst.
@@ -198,7 +263,10 @@ command -v jq >/dev/null 2>&1 || { log "jq not found in PATH"; exit 5; }
 command -v openssl >/dev/null 2>&1 || { log "openssl not found in PATH; cannot verify signature"; exit 5; }
 
 # shellcheck source=lib-config.sh
-source "${LIB_DIR}/lib-config.sh"
+if ! source "${LIB_DIR}/lib-config.sh"; then
+  log "cannot load lib-config.sh from ${LIB_DIR}"
+  exit 5
+fi
 load_MergeMill_conf "${SCRIPT_DIR}" || true
 
 if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
@@ -221,9 +289,24 @@ chmod 700 "$STATE_DIR" 2>/dev/null || true
 # verbatim, including a trailing newline or its absence.
 _REQ="$(mktemp "${TMPDIR:-/tmp}/mergemill-wake-req.XXXXXX")"
 _BODY="$(mktemp "${TMPDIR:-/tmp}/mergemill-wake-body.XXXXXX")"
-trap 'rm -f "$_REQ" "$_BODY"' EXIT
+# Release a lock held at abort time (set -e unwinding past release_lock), plus
+# the temp files.
+_cleanup() {
+  [[ "$_LOCK_HELD" -eq 1 ]] && rm -rf "$LOCK_DIR"
+  rm -f "${_REQ:-}" "${_BODY:-}"
+}
+trap _cleanup EXIT
 
-cat > "$_REQ"
+# Bounded read: never buffer more than MAX_REQUEST_BYTES of delivery. One
+# extra byte detects overflow so a truncated body is rejected, not verified.
+if ! head -c "$(( MAX_REQUEST_BYTES + 1 ))" > "$_REQ"; then
+  log "failed to read a delivery from stdin"
+  exit 5
+fi
+if [[ "$(wc -c < "$_REQ")" -gt "$MAX_REQUEST_BYTES" ]]; then
+  log "REJECT: delivery exceeds ${MAX_REQUEST_BYTES} bytes"
+  exit 3
+fi
 
 consumed=0
 sig=""
@@ -239,7 +322,7 @@ while IFS= read -r line; do
   esac
 done < "$_REQ"
 
-tail -c +$(( consumed + 1 )) "$_REQ" > "$_BODY"
+tail -c +$(( consumed + 1 )) "$_REQ" > "$_BODY" || { log "cannot split delivery body"; exit 5; }
 
 if [[ -z "$sig" ]]; then
   log "REJECT: missing X-Hub-Signature-256"
@@ -250,7 +333,15 @@ if [[ "$sig" != sha256=* ]]; then
   exit 3
 fi
 _expected="${sig#sha256=}"
-_got="$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" < "$_BODY" | awk '{print $NF}')"
+# NB: the secret reaches openssl via argv and the digests are compared with a
+# plain string test. Both are fine for a same-user, loopback-only receiver;
+# constant-time compare and out-of-argv key passing add moving parts without
+# moving the trust boundary (the operator's own host). A failed hash is a
+# rejected delivery, never a partial verify.
+if ! _got="$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" < "$_BODY" 2>/dev/null | awk '{print $NF}')"; then
+  log "REJECT: could not compute the HMAC over the body"
+  exit 3
+fi
 if [[ "$_got" != "$_expected" ]]; then
   log "REJECT: X-Hub-Signature-256 does not match the body"
   exit 3

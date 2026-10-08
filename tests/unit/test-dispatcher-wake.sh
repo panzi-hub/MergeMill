@@ -177,6 +177,7 @@ run_case_expect_zero() { # $1 label, $2 event, $3 body, $4 sigmode, $5 secret
   run_wake "$CASE_DIR/req"; local rc=$?
   assert_ne "$1 non-zero rc" 0 "$rc"
   assert_eq "$1 zero ticks" 0 "$(tick_count)"
+  assert_has "$1 log names the rejection" "REJECT" "$(cat "$LOGF")"
 }
 run_case_expect_zero "TC-WHWAKE-010 missing signature" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" none "$SECRET"
 run_case_expect_zero "TC-WHWAKE-011 malformed signature" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" malformed "$SECRET"
@@ -250,6 +251,30 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# TC-WHWAKE-043..044: a crashed holder's lock is stolen (no permanent wedge)
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== TC-WHWAKE-043..044: stale wake lock is stolen => delivery still ticks ==="
+# 043: lock dir with no pid file (holder died between mkdir and the pid write).
+setup_case "$SECRET"
+mkdir -p "$STATE/tick.lock"
+build_request "$CASE_DIR/req" "issues" "$(body_issue_labeled "$REPO" "MergeMill")"
+export WAKE_LOCK_GRACE_SECONDS=0
+run_wake "$CASE_DIR/req"; rc=$?
+unset WAKE_LOCK_GRACE_SECONDS
+assert_rc "TC-WHWAKE-043 unrecorded stale lock rc" 0 "$rc"
+assert_eq "TC-WHWAKE-043 stale lock stolen => one tick" 1 "$(tick_count)"
+# 044: lock dir stamped with a pid that has already exited.
+setup_case "$SECRET"
+sleep 0.1 & dead=$!; wait "$dead" 2>/dev/null
+mkdir -p "$STATE/tick.lock"
+printf '%s\n' "$dead" > "$STATE/tick.lock/pid"
+build_request "$CASE_DIR/req" "issues" "$(body_issue_labeled "$REPO" "MergeMill")"
+run_wake "$CASE_DIR/req"; rc=$?
+assert_rc "TC-WHWAKE-044 dead-holder lock rc" 0 "$rc"
+assert_eq "TC-WHWAKE-044 dead-holder lock stolen => one tick" 1 "$(tick_count)"
+
+# ---------------------------------------------------------------------------
 # TC-WHWAKE-052: the tick receives no args and no body
 # ---------------------------------------------------------------------------
 echo ""
@@ -275,7 +300,7 @@ assert_not_has "TC-WHWAKE-050 no netcat listener" "nc -l" "$src"
 assert_not_has "TC-WHWAKE-050 no socat" "socat" "$src"
 assert_not_has "TC-WHWAKE-050 no --bind" "--bind" "$src"
 assert_not_has "TC-WHWAKE-050 receiver never touches launchd" "launchctl" "$src"
-assert_has     "TC-WHWAKE-050 receiver consumes stdin" 'cat >' "$src"
+assert_has     "TC-WHWAKE-050 receiver consumes stdin" '> "$_REQ"' "$src"
 assert_has     "TC-WHWAKE-050 default tick is dispatcher-tick.sh" "dispatcher-tick.sh" "$src"
 
 installer="$(cat "$INSTALLER")"
