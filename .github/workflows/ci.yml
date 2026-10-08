@@ -231,6 +231,7 @@ jobs:
             skills/MergeMill-dispatcher/scripts/MergeMill-review.sh \
             skills/MergeMill-dispatcher/scripts/dispatch-local.sh \
             skills/MergeMill-dispatcher/scripts/dispatcher-tick.sh \
+            skills/MergeMill-dispatcher/scripts/dispatcher-wake.sh \
             skills/MergeMill-dispatcher/scripts/lib-agent.sh \
             skills/MergeMill-dispatcher/scripts/adapters/claude.sh \
             skills/MergeMill-dispatcher/scripts/adapters/codex.sh \
