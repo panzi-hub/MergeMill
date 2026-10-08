@@ -11,6 +11,7 @@ For the high-level overview and quick start, see [`docs/MergeMill-pipeline.md`](
 | [`state-machine.md`](state-machine.md) | The label state machine for an `MergeMill`-tagged GitHub issue. The entire pipeline is a function of label transitions. |
 | [`platform.md`](platform.md) | Supported host. This version maintains macOS only. |
 | [`dispatcher-flow.md`](dispatcher-flow.md) | What the dispatcher does on each launchd tick. The five steps, dependency check, retry counter, stale detection (5a + 5b). The clock is launchd only. |
+| [`webhook-wake.md`](webhook-wake.md) | The webhook wake: a signature-verified, coalesced kick that runs the same `dispatcher-tick.sh` sooner. launchd remains the only clock; the body never reaches an agent (INV-127). |
 | [`dev-agent-flow.md`](dev-agent-flow.md) | The dev-agent wrapper lifecycle: PID guard, prompt construction, agent invocation, exit-trap label transitions. |
 | [`review-agent-flow.md`](review-agent-flow.md) | The review-agent wrapper lifecycle: PID guard, requirement-drift detection, decision gate, reviewed-HEAD trailer. |
 | [`handoffs.md`](handoffs.md) | The five handoff points between dispatcher / dev / review and the invariants each side is required to uphold. |

@@ -6841,3 +6841,30 @@ _Triage (issue #236): [machine-checked: tests/unit/test-dispatcher-step3-empty-s
 - #28 — the macOS abort this invariant codifies (fix branch `fix/dispatcher-step3-empty-seq`).
 - [INV-124](#inv-124-workflow-state-marks-are-timestamped-in-utc-parsed-in-utc-by-a-host-portable-resolver-and-the-staged-file-list-is-read-without-bash-4-only-builtins) — sibling BSD/bash-3.2 portability invariant in the hooks layer.
 - [INV-125](#inv-125-setsid-is-resolved-through-an-append-only-source-time-fallback-probe-so-a-keg-only-util-linux-install-is-found-instead-of-silently-degrading-the-lane-backend) — sibling macOS portability invariant for `setsid` resolution.
+
+## INV-127: the webhook wake kicks the same dispatcher-tick.sh entry point and never becomes a second scheduler
+
+_Triage (issue #35): [machine-checked: tests/unit/test-dispatcher-wake.sh]_
+
+**Rule**:
+
+1. **launchd stays the only clock.** The wake makes a tick happen sooner; it never installs, retimes, or replaces a scheduler. `install-dispatcher-timer.sh` is unchanged: launchd-only, 300-second interval, still naming `dispatcher-tick.sh`.
+2. **Same entry point, no payload.** The wake invokes `dispatcher-tick.sh` — the file a manual debug run uses — with no arguments and empty stdin. The webhook body is verified and then discarded; it is never passed to the tick, and never reaches an agent. The receiver does not read labels or transition issues.
+3. **No public interface.** The receiver reads exactly one delivery from stdin and binds no socket, so it cannot bind a public interface. The operator's local feed MUST be loopback-only.
+4. **Fail closed on the untrusted hint.** Missing, malformed, or mismatched `X-Hub-Signature-256`, or an unset secret, rejects the delivery with no tick. A delivery whose repository is not `$REPO`, or whose event is not dispatchable (`issues`/`labeled` on `MergeMill`/`pending-review`/`pending-dev`; `pull_request`/`opened`|`synchronize`; `check_run`|`check_suite`/`completed`), is ignored with no tick.
+5. **Bounded, serialized kicks.** Deliveries within `WAKE_WINDOW_SECONDS` (default 15) of the first accepted delivery start at most one tick. A wake-invoked tick already running — detected by the receiver's own lock, never by parsing launchd — takes no concurrent tick and starts at most one follow-up after it exits. A sleeping Mac is not woken.
+
+**Why**: the sole dispatcher clock is the 300-second launchd agent, so a dispatchable change can wait up to five minutes. A webhook wake closes that gap without becoming a second scheduler, opening a public port, or trusting the webhook body as instructions. Keeping the wake on the same `dispatcher-tick.sh` entry point and gating it on a verified signature keeps `dispatcher-tick.sh` the only place that reads the label state machine, so a bad or forged hint can be dropped rather than acted on.
+
+**Producer**: `skills/MergeMill-dispatcher/scripts/dispatcher-wake.sh` (the receiver).
+
+**Consumer**: `dispatcher-tick.sh`, invoked unchanged; transitively every issue whose label change would otherwise wait for the next launchd interval.
+
+**Status**: **ENFORCED**.
+
+**Test**: `tests/unit/test-dispatcher-wake.sh` — TC-WHWAKE-001..004 (valid fixture ⇒ exactly one stub tick), 010..013 (missing/malformed/mismatched signature, unset secret ⇒ zero ticks), 020..026 (repo mismatch, non-dispatchable events ⇒ zero ticks), 030..031 (coalesce window), 040..042 (running tick ⇒ no concurrency, exactly one follow-up), 050..052 (no public bind, launchd installer unchanged, no payload/args reach the tick). Per-case detail in [docs/test-cases/dispatcher-webhook-wake.md](../test-cases/dispatcher-webhook-wake.md). The operator contract is [webhook-wake.md](webhook-wake.md).
+
+**Cross-references**:
+- #35 — the feature that introduces the wake.
+- [INV-108](#inv-108-every-dispatcher-tick-dispatch-site-acquires-a-controller-side-per-issuemode-marker-atomically-before-any-side-effect--a-losing-acquire-skips-cleanly-never-dispatches-the-marker-expires-via-ttl-never-wedging-the-issue-the-dispatch-token-gains-a-run-field-for-post-hoc-attribution) — the per-issue dispatch marker that keeps dispatch single-winner even if a launchd tick and a wake tick overlap.
+- [platform.md](platform.md) and [dispatcher-flow.md](dispatcher-flow.md) — launchd is the only clock; the wake only adds a sooner kick.

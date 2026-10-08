@@ -15,7 +15,7 @@ description: >
 
 # 自主开发团队 Dispatcher
 
-扫描 GitHub Issue 并调度 dev/review 任务。一次 tick 是 `dispatcher-tick.sh`（单项目）或 `dispatcher-multi-tick.sh`（多项目）的一次调用。时钟只有 macOS launchd，由 `install-dispatcher-timer.sh` 安装；不要配置 cron 或 OpenClaw。完整的状态机、每步语义和不变量见[源码仓库的 `docs/pipeline/`](https://github.com/panzi-hub/MergeMill/tree/main/docs/pipeline)——那是规范；本文件是 Agent 的调用契约。
+扫描 GitHub Issue 并调度 dev/review 任务。一次 tick 是 `dispatcher-tick.sh`（单项目）或 `dispatcher-multi-tick.sh`（多项目）的一次调用。时钟只有 macOS launchd，由 `install-dispatcher-timer.sh` 安装；不要配置 cron 或 OpenClaw。`dispatcher-wake.sh` 是一个可选的 webhook 唤醒：它校验 `X-Hub-Signature-256`、去抖后在同一个 `dispatcher-tick.sh` 入口上提前跑一次 tick——它不是第二个时钟，也不会把 webhook body 交给 Agent（见 [`docs/pipeline/webhook-wake.md`](https://github.com/panzi-hub/MergeMill/blob/main/docs/pipeline/webhook-wake.md)）。完整的状态机、每步语义和不变量见[源码仓库的 `docs/pipeline/`](https://github.com/panzi-hub/MergeMill/tree/main/docs/pipeline)——那是规范；本文件是 Agent 的调用契约。
 
 ## 前置条件
 
