@@ -93,16 +93,15 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# The window may come from the env default (not the flag), so validate it
-# here too: a non-numeric window would silently break coalescing.
-if [[ ! "$WINDOW_SECONDS" =~ ^[0-9]+$ ]]; then
-  log "WAKE_WINDOW_SECONDS must be a non-negative integer (got '${WINDOW_SECONDS}')"
-  exit 5
-fi
-if [[ ! "$MAX_REQUEST_BYTES" =~ ^[0-9]+$ ]]; then
-  log "WAKE_MAX_REQUEST_BYTES must be a non-negative integer (got '${MAX_REQUEST_BYTES}')"
-  exit 5
-fi
+# require_uint <env-name> <value> — exit 5 unless value is a non-negative int.
+# A bad numeric knob would otherwise abort later with an arithmetic error.
+require_uint() {
+  [[ "$2" =~ ^[0-9]+$ ]] || { log "$1 must be a non-negative integer (got '$2')"; exit 5; }
+}
+require_uint WAKE_WINDOW_SECONDS "$WINDOW_SECONDS"
+require_uint WAKE_MAX_REQUEST_BYTES "$MAX_REQUEST_BYTES"
+require_uint WAKE_LOCK_GRACE_SECONDS "$LOCK_GRACE_SECONDS"
+require_uint WAKE_LOCK_MAX_AGE_SECONDS "$LOCK_MAX_AGE_SECONDS"
 
 if [[ -z "$STATE_DIR" ]]; then
   STATE_DIR="${WAKE_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/mergemill-dispatcher-wake}"
@@ -161,20 +160,21 @@ _lock_stale() {
 }
 
 acquire_lock() {
-  _take_lock && return 0
-  local holder=""
-  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")"
-  # Steal a lock whose holder is dead (or unrecorded past the grace, or
-  # presumed PID reuse), so a crashed wake cannot wedge the lane forever.
-  if _lock_stale; then
+  if ! _take_lock; then
+    local holder=""
+    holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")"
+    # Steal a lock whose holder is dead (or unrecorded past the grace, or
+    # presumed PID reuse), so a crashed wake cannot wedge the lane forever.
+    _lock_stale || return 1
     log "stealing stale wake lock (holder=${holder:-<none>})"
     rm -rf "$LOCK_DIR"
-    # A holder that died mid-session may have left a follow-up request that
-    # nothing will consume; drop it so it cannot force a later tick.
-    rm -f "$PENDING_FILE"
-    _take_lock && return 0
+    _take_lock || return 1
   fi
-  return 1
+  # A follow-up is only ever requested while the lock is held, so any pending
+  # present once we own the lock is orphaned (a burst that spilled past the
+  # one-follow-up cap). Drop it so it cannot force an extra tick later.
+  rm -f "$PENDING_FILE"
+  return 0
 }
 
 release_lock() { rm -rf "$LOCK_DIR"; _LOCK_HELD=0; }
@@ -289,8 +289,9 @@ chmod 700 "$STATE_DIR" 2>/dev/null || true
 # verbatim, including a trailing newline or its absence.
 _REQ="$(mktemp "${TMPDIR:-/tmp}/mergemill-wake-req.XXXXXX")"
 _BODY="$(mktemp "${TMPDIR:-/tmp}/mergemill-wake-body.XXXXXX")"
-# Release a lock held at abort time (set -e unwinding past release_lock), plus
-# the temp files.
+# Release a lock held at error-abort time (set -e unwinding past release_lock),
+# plus the temp files. A receiver killed by a signal leaves its lock, which the
+# stale-lock path above reclaims.
 _cleanup() {
   [[ "$_LOCK_HELD" -eq 1 ]] && rm -rf "$LOCK_DIR"
   rm -f "${_REQ:-}" "${_BODY:-}"

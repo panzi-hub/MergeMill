@@ -171,18 +171,21 @@ run_case_expect_one "TC-WHWAKE-004 check_suite completed" "check_suite" "$(body_
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== TC-WHWAKE-010..013: bad signature/secret => zero ticks ==="
-run_case_expect_zero() { # $1 label, $2 event, $3 body, $4 sigmode, $5 secret
+run_case_expect_zero() { # $1 label, $2 event, $3 body, $4 sigmode, $5 secret, $6 expected log (optional)
   setup_case "$5"
   build_request "$CASE_DIR/req" "$2" "$3" "$4"
   run_wake "$CASE_DIR/req"; local rc=$?
   assert_ne "$1 non-zero rc" 0 "$rc"
   assert_eq "$1 zero ticks" 0 "$(tick_count)"
   assert_has "$1 log names the rejection" "REJECT" "$(cat "$LOGF")"
+  if [[ -n "${6:-}" ]]; then
+    assert_has "$1 log names the reason" "$6" "$(cat "$LOGF")"
+  fi
 }
-run_case_expect_zero "TC-WHWAKE-010 missing signature" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" none "$SECRET"
-run_case_expect_zero "TC-WHWAKE-011 malformed signature" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" malformed "$SECRET"
-run_case_expect_zero "TC-WHWAKE-012 mismatched signature" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" bad "$SECRET"
-run_case_expect_zero "TC-WHWAKE-013 secret unset (fail closed)" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" auto ""
+run_case_expect_zero "TC-WHWAKE-010 missing signature" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" none "$SECRET" "missing X-Hub-Signature-256"
+run_case_expect_zero "TC-WHWAKE-011 malformed signature" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" malformed "$SECRET" "malformed X-Hub-Signature-256"
+run_case_expect_zero "TC-WHWAKE-012 mismatched signature" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" bad "$SECRET" "does not match the body"
+run_case_expect_zero "TC-WHWAKE-013 secret unset (fail closed)" "issues" "$(body_issue_labeled "$REPO" "MergeMill")" auto "" "WEBHOOK_SECRET is unset"
 
 # ---------------------------------------------------------------------------
 # TC-WHWAKE-020..026: repo / event gates ignore, zero ticks
@@ -273,6 +276,22 @@ build_request "$CASE_DIR/req" "issues" "$(body_issue_labeled "$REPO" "MergeMill"
 run_wake "$CASE_DIR/req"; rc=$?
 assert_rc "TC-WHWAKE-044 dead-holder lock rc" 0 "$rc"
 assert_eq "TC-WHWAKE-044 dead-holder lock stolen => one tick" 1 "$(tick_count)"
+
+# 045: an unrecorded lock within the grace is NOT stolen (no premature steal).
+setup_case "$SECRET"
+mkdir -p "$STATE/tick.lock"
+build_request "$CASE_DIR/req" "issues" "$(body_issue_labeled "$REPO" "MergeMill")"
+run_wake "$CASE_DIR/req"; rc=$?
+assert_rc "TC-WHWAKE-045 unrecorded lock within grace rc" 0 "$rc"
+assert_eq "TC-WHWAKE-045 held lock not stolen => zero ticks" 0 "$(tick_count)"
+assert_file "TC-WHWAKE-045 deferred as follow-up (pending)" "$STATE/pending"
+# 046: an orphaned pending file with the lock free must not force a double tick.
+setup_case "$SECRET"
+: > "$STATE/pending"
+build_request "$CASE_DIR/req" "issues" "$(body_issue_labeled "$REPO" "MergeMill")"
+run_wake "$CASE_DIR/req"; rc=$?
+assert_rc "TC-WHWAKE-046 orphaned pending rc" 0 "$rc"
+assert_eq "TC-WHWAKE-046 orphaned pending => exactly one tick" 1 "$(tick_count)"
 
 # ---------------------------------------------------------------------------
 # TC-WHWAKE-052: the tick receives no args and no body

@@ -84,7 +84,9 @@ overridable with `WAKE_STATE_DIR`.
   stolen, so a crashed wake cannot wedge the lane: a dead holder's pid, a
   lock with no pid recorded (holder died between `mkdir` and the pid
   write, after a short grace), or a lock older than one hour (PID reuse)
-  is reclaimed. An abort while the lock is held releases it on exit.
+  is reclaimed. A normal error abort while the lock is held releases it
+  on exit; a receiver killed by a signal leaves its lock, which the
+  stale-lock path reclaims.
 - **Bounded follow-up.** At most one follow-up runs per session; a steady
   stream cannot livelock the wake. Any residual boundary race degrades to
   the launchd backstop (≤ 300 s), never to a wrong action.

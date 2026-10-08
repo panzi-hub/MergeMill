@@ -54,6 +54,8 @@ concurrently.
 | TC-WHWAKE-042 | Whole 040+041 run | stub's `overlap` marker is empty — never two ticks at once |
 | TC-WHWAKE-043 | A pre-existing lock dir with no `pid` file (holder died between `mkdir` and the write), past the grace | lock is stolen; a matching delivery still ticks once (no permanent wedge) |
 | TC-WHWAKE-044 | A pre-existing lock dir stamped with an already-exited pid | dead holder's lock is stolen; a matching delivery still ticks once |
+| TC-WHWAKE-045 | A pre-existing lock dir with no `pid` file but younger than the grace | lock is **not** stolen — a live holder mid-create is never raced; zero ticks, delivery deferred as `pending` |
+| TC-WHWAKE-046 | An orphaned `pending` file on disk with the lock free | one tick only — the stale request is dropped, not run as a follow-up |
 
 ## Structural invariants (AC: assert no public bind; launchd not turned into a second clock)
 
