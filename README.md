@@ -6,11 +6,9 @@
 
 *Issue → Dev Agent → Review Agent → Merged PR*
 
-*Issue → Dev Agent → Review Agent → マージ済み PR*
-
 <br>
 
-**[🇨🇳 中文](#-中文)** &nbsp;|&nbsp; **[🇺🇸 English](#-english)** &nbsp;|&nbsp; **[🇯🇵 日本語](#-日本語)**
+**[🇨🇳 中文](#-中文)** &nbsp;|&nbsp; **[🇺🇸 English](#-english)**
 
 </div>
 
@@ -21,6 +19,12 @@
 MergeMill 是一个只支持 macOS 的自动化开发流水线，将 Issue 转化为 Pull Request，并按仓库策略完成审查与合并。其他系统的适配留到后续版本，不在当前仓库里并行维护。合并审批受平台权限约束：例如 GitHub 不允许 PR 作者批准自己的 PR，因此需要其他有权限的 reviewer 或配置允许的合并流程。
 
 它会扫描带有 `MergeMill` 标签的 Issue，调度一个 **Dev Agent（开发 Agent）** 在隔离的 worktree 中通过 TDD（测试驱动开发）实现功能，然后移交给 **Review Agent（审查 Agent）** 进行代码审查和可选的 E2E 验证。整个循环由 macOS launchd 每 300 秒无人值守调用。
+
+### 当前范围
+
+这一版足够在一台醒着的 Mac 上无人值守地跑通 Issue 到合并。每一轮 tick 会扫完所有匹配的 Issue，同时运行的 Agent 默认不超过 5 个（`MAX_CONCURRENT`）；每张 Issue 有自己的 worktree。安装器会写入 `AbandonProcessGroup`，tick 结束不会杀掉已经拉起的开发或审查进程。GitHub 读超时只跳过这一步扫描，tick 仍以 0 退出，launchd 不会因此推迟后面的调度。
+
+还不是完成品。其他操作系统留到后续版本。Mac 睡眠时不会 tick。审查如果卡在 fan-out，观察循环最多等到 6 小时。一轮 tick 中途的 GitHub 写操作失败，仍可能中止这一轮。
 
 ### 特性
 
@@ -110,6 +114,12 @@ MergeMill is an automated development pipeline that turns Issues into Pull Reque
 
 It scans Issues labeled `MergeMill`, dispatches a **Dev Agent** to implement features through TDD in isolated worktrees, then hands off to a **Review Agent** for code review and optional E2E verification. The entire cycle is invoked unattended by a macOS launchd agent every 300 seconds.
 
+### Current scope
+
+This version is enough to run issue-to-merge unattended on one awake Mac. Each tick walks every matching issue, with at most 5 agents running at once by default (`MAX_CONCURRENT`). Each issue gets its own worktree. The installer sets `AbandonProcessGroup`, so a finished tick does not kill the dev or review processes it just started. A GitHub read timeout skips that scan and the tick still exits 0, so launchd does not delay later ticks.
+
+It is not a finished product. Other operating systems belong in later releases. A sleeping Mac does not tick. If review stalls in fan-out, the observe loop waits up to 6 hours. A GitHub write that fails in the middle of a tick can still abort that tick.
+
 ### Features
 
 - **Automated development loop**: issue scanning, agent implementation and review, with merge behavior governed by repository policy; human approval may be required
@@ -192,101 +202,13 @@ Failure classes: transient / agent / code / policy / configuration. They are rec
 
 ---
 
-## 🇯🇵 日本語
-
-MergeMill（マージミル）は、Issue から Pull Request までの開発を自動化し、リポジトリのポリシーに従ってレビューとマージを進めるパイプラインです。プラットフォームの権限規則は適用されます。たとえば GitHub では PR 作成者自身は承認できないため、別の権限を持つ reviewer、または許可されたマージ手順が必要な場合があります。
-
-`MergeMill` ラベルが付いた Issue をスキャンし、**Dev Agent（開発エージェント）** を隔離された worktree にディスパッチして TDD（テスト駆動開発）で機能を実装、その後 **Review Agent（レビューエージェント）** に引き継いでコードレビューとオプションの E2E 検証を行います。全サイクルは macOS launchd が 300 秒ごとに無人実行します。
-
-### 主な機能
-
-- **開発の自動化**：Issue のスキャン、Agent による実装とレビューを行い、マージはリポジトリのポリシーに従います。人の承認が必要な場合があります
-- **マルチ Agent CLI 対応**：Claude Code、Codex CLI、Kiro CLI、opencode、Cursor Agent、Antigravity CLI (agy)、および `-p <prompt>` 非対話フラグを受け付ける任意の CLI
-- **マルチプラットフォーム**：GitHub および GitLab（gitlab.com とセルフホストインスタンス）をプラグ可能なプロバイダーインターフェースでサポート
-- **TDD ワークフロー**：テストケース文書 → 単体テスト → 実装 → 検証、80% 以上のカバレッジを強制
-- **マルチ Agent レビュー**：複数の独立したレビューエージェントを並列実行し、全会一致の PASS のみマージ
-- **E2E 検証**：ブラウザ自動化（Chrome DevTools MCP）またはコマンドモードのエンドツーエンドテスト
-- **実行状態の可視化**：run ID、attempt、ログ、正規化された Agent 結果を保存し、状態遷移を JSONL イベントに記録。`status.sh` で確認できます（`--all` で全対象 Issue、`--issue <n>` で単一、`--json` で安定した機械可読出力）
-- **安全な復旧**：`recover.sh` はデフォルトで読み取り専用です。現在 `--apply` で許可されるのは、dev wrapper の PID/heartbeat が失効し、関連 PR がある場合の `in-progress` → `pending-review` のみです。それ以外は拒否します
-
-### クイックスタート
-
-**Skills としてインストール：**
-
-```bash
-npx skills add panzi-hub/MergeMill
-```
-
-| Skill | 説明 |
-|-------|------|
-| **MergeMill-dev** | TDD ワークフロー：git worktree 隔離、デザインキャンバス、テストファースト開発、コードレビュー、CI 検証 |
-| **MergeMill-review** | PR コードレビュー：チェックリスト検証、マージコンフリクト解決、E2E テスト、自動マージ |
-| **MergeMill-dispatcher** | Issue スキャナー。macOS launchd が 300 秒ごとに開発・レビューエージェントをディスパッチ |
-| **MergeMill-common** | 共有ワークフロー強制フックとエージェント呼び出し可能なユーティリティスクリプト |
-| **create-issue** | 構造化 Issue 作成：テンプレート、MergeMill ラベルガイダンス、ワークスペース変更添付 |
-
-**テンプレートとして使用：**
-
-```bash
-gh repo create my-project --template panzi-hub/MergeMill
-cd my-project
-cp scripts/MergeMill.conf.example scripts/MergeMill.conf
-# MergeMill.conf をプロジェクト設定で編集
-( source scripts/MergeMill.conf && bash scripts/setup-labels.sh "$REPO" )
-# 唯一のディスパッチャークロックをインストール（macOS launchd、300 秒ごと）
-bash scripts/install-dispatcher-timer.sh
-```
-
-### 仕組み
-
-```
-Issue（MergeMill ラベル）
-   │
-   ▼
-Dispatcher（launchd tick）──▶ Dev Agent ──────────▶ Review Agent
-   スキャン + ディスパッチ   worktree + TDD       PR 検出 + レビュー
-   並列制御 + リトライ       実装 + テスト         オプション E2E 検証
-                             PR 作成               承認 + マージ
-```
-
-Issue のラベル遷移は dispatcher と Agent が協調して管理します。dispatcher は launchd が 300 秒ごとに呼び出し、ラベルを後方互換の状態投影として使用します。実行記録と遷移イベントは診断用です。Agent の完了結果は終了コードと失敗分類を含む `agent-result.json` に統一されます：
-
-```
-MergeMill → in-progress → pending-review → reviewing → approved（レビュー/マージ完了）
-      │              │                                  │
-      │              └─ dev wrapper の PID/heartbeat が失効 + 関連 PR → recover.sh で安全に引き継ぎ
-      │                                                 └─→ pending-dev（レビュー失敗）
-```
-
-失敗分類：transient / agent / code / policy / configuration。診断のため実行結果に記録します。dispatcher は引き続き PID、heartbeat、dispatch marker を使用します。Webhook 駆動と独立 lease サービスはまだ実装されていません。
-
-### セキュリティ
-
-**プライベートリポジトリと信頼できる環境向けに設計。** パイプラインは Issue の内容をエージェントの指示として実行します——公開リポジトリではプロンプトインジェクションの攻撃面となります。リスクモデルと緩和策については **[docs/security.md](docs/security.md)** をお読みください。
-
-### ドキュメント索引
-
-| トピック | 場所 |
-|---|---|
-| インストールと設定 | [docs/installation.md](docs/installation.md) |
-| Agent CLI サポートマトリックス | [docs/agent-clis.md](docs/agent-clis.md) |
-| GitHub App 認証設定 | [docs/github-app-setup.md](docs/github-app-setup.md) |
-| GitLab 設定 | [docs/gitlab-setup.md](docs/gitlab-setup.md) |
-| セキュリティモデル | [docs/security.md](docs/security.md) |
-| パイプラインアーキテクチャ | [docs/MergeMill-pipeline.md](docs/MergeMill-pipeline.md) |
-| クロス Agent フックサポート | [docs/cross-agent-hooks.md](docs/cross-agent-hooks.md) |
-| CI ワークフロー設定 | [docs/github-actions-setup.md](docs/github-actions-setup.md) |
-| パイプライン仕様 | [docs/pipeline/](docs/pipeline/) |
-
----
-
 <div align="center">
 
-**参考项目 &nbsp;|&nbsp; Based on &nbsp;|&nbsp; ベースプロジェクト**
+**参考项目 &nbsp;|&nbsp; Based on**
 
 [panzi-hub/MergeMill](https://github.com/panzi-hub/MergeMill)
 
-**许可证 &nbsp;|&nbsp; License &nbsp;|&nbsp; ライセンス**
+**许可证 &nbsp;|&nbsp; License**
 
 MIT License
 
