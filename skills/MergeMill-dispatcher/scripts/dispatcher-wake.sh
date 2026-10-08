@@ -130,7 +130,13 @@ _take_lock() {
 # _lock_age — whole seconds since the lock dir was created, or "" if unknown.
 _lock_age() {
   local mtime="" now="" age=""
-  mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo "")"
+  # GNU `stat -f` does not fail on the BSD-style call — it exits 0 with
+  # non-numeric output — so each attempt is validated before we accept it,
+  # never chained with `||`.
+  mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null || true)"
+  if [[ ! "$mtime" =~ ^[0-9]+$ ]]; then
+    mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || true)"
+  fi
   [[ "$mtime" =~ ^[0-9]+$ ]] || return 0
   now="$(date +%s)" || return 0
   age=$(( now - mtime ))
